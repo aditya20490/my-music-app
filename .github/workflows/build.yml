@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,24 +30,49 @@ jobs:
           distribution: temurin
           java-version: 17
 
+      - name: Speed up builds with cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.run_number }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
       - name: Create the app project
         run: |
-          npx create-expo-app@latest musicapp --template blank
+          npx create-expo-app@latest musicapp --template blank@sdk-54
           cd musicapp
           rm -f App.tsx App.js
           cp ../App.js App.js
-          npx expo install expo-audio
+          npx expo install expo-audio expo-media-library expo-linear-gradient react-native-safe-area-context @expo/vector-icons expo-font
 
-      - name: Set app name and package
+      - name: Set app name, package and permissions
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           cd musicapp
           node -e "
           const fs = require('fs');
           const cfg = JSON.parse(fs.readFileSync('app.json', 'utf8'));
+          const run = parseInt(process.env.RUN_NUMBER, 10);
           cfg.expo.name = 'My Music';
           cfg.expo.slug = 'my-music';
+          cfg.expo.version = '1.0.' + run;
+          cfg.expo.userInterfaceStyle = 'dark';
           cfg.expo.android = cfg.expo.android || {};
           cfg.expo.android.package = 'com.mymusic.player';
+          cfg.expo.android.versionCode = run;
+          cfg.expo.android.permissions = [
+            'android.permission.READ_MEDIA_AUDIO',
+            'android.permission.READ_EXTERNAL_STORAGE',
+            'android.permission.POST_NOTIFICATIONS',
+            'android.permission.FOREGROUND_SERVICE',
+            'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
+            'android.permission.WAKE_LOCK'
+          ];
+          cfg.expo.plugins = ['expo-audio', 'expo-media-library'];
           fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
           "
 
@@ -56,7 +85,7 @@ jobs:
         run: |
           cd musicapp/android
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 
       - name: Publish APK to Releases
         uses: softprops/action-gh-release@v2
