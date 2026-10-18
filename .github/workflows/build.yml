@@ -48,8 +48,7 @@ jobs:
           cp ../App.js App.js
           npx expo install expo-audio expo-media-library expo-linear-gradient react-native-safe-area-context @expo/vector-icons expo-font
           npx expo install --fix
-          npx expo --version
-          npm ls expo expo-media-library expo-audio --depth=0 || true
+          npm install @missingcore/react-native-metadata-retriever@^3.2.1 || echo "Song details library failed to install, continuing without it"
 
       - name: Set app name, package and permissions
         env:
@@ -79,16 +78,24 @@ jobs:
           fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
           "
 
-      - name: Generate Android project
+      - name: Build APK
         run: |
           cd musicapp
           npx expo prebuild --platform android
-
-      - name: Build APK
-        run: |
-          cd musicapp/android
+          printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
+          cd android
           chmod +x gradlew
-          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+          if ! ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a; then
+            echo "Build failed, trying again without the song details library"
+            cd ..
+            npm uninstall @missingcore/react-native-metadata-retriever
+            rm -rf android
+            npx expo prebuild --platform android
+            printf '\norg.gradle.parallel=true\norg.gradle.caching=true\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n' >> android/gradle.properties
+            cd android
+            chmod +x gradlew
+            ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
+          fi
 
       - name: Publish APK to Releases
         uses: softprops/action-gh-release@v2
