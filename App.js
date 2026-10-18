@@ -17,8 +17,14 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import * as MediaLibrary from 'expo-media-library';
+import * as MediaLibraryMain from 'expo-media-library';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+let MediaLibrary = MediaLibraryMain;
+if (typeof MediaLibraryMain.getAssetsAsync !== 'function') {
+  try {
+    MediaLibrary = require('expo-media-library/legacy');
+  } catch (e) {}
+}
 
 // Songs shorter than this (in seconds) are hidden, so ringtones don't show up.
 const MIN_SECONDS = 30;
