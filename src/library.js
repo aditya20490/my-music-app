@@ -1,0 +1,469 @@
+// Everything that talks to the phone: finding songs, reading song info, cover art, lyrics, saved settings.
+import { Platform, PermissionsAndroid } from 'react-native';
+import { cleanTitle } from './utils';
+
+// The newest Expo keeps the song-scanning functions in "expo-media-library/legacy".
+let MediaLibrary = null;
+try {
+  MediaLibrary = require('expo-media-library/legacy');
+} catch (e) {
+  try {
+    MediaLibrary = require('expo-media-library');
+  } catch (e2) {
+    MediaLibrary = null;
+  }
+}
+
+// Reads artist, album, cover art and lyrics from the song files.
+let Meta = null;
+let metaLoadError = '';
+try {
+  Meta = require('@missingcore/react-native-metadata-retriever');
+} catch (e) {
+  Meta = null;
+  metaLoadError = e && e.message ? String(e.message).slice(0, 160) : 'unknown';
+}
+
+// Saves small things (settings, song info) on the phone.
+let AS = null;
+try {
+  const mod = require('@react-native-async-storage/async-storage');
+  AS = mod.default || mod;
+} catch (e) {
+  AS = null;
+}
+
+// Songs shorter than this (in seconds) are hidden, so ringtones don't show up.
+const MIN_SECONDS = 30;
+
+export const META_AVAILABLE = !!Meta;
+
+// ---------- Diagnostics (shown in Options > Library, helps us find problems) ----------
+const diag = {
+  metaLoaded: !!Meta,
+  metaLoadError: metaLoadError,
+  metaFunctions: Meta ? Object.keys(Meta).join(', ') : '',
+  metaOk: 0,
+  metaFail: 0,
+  lastError: '',
+  artSaved: 0,
+  artNone: 0,
+  artFail: 0,
+  lastArtError: '',
+};
+
+export function getDiagnostics() {
+  return { ...diag };
+}
+
+function errText(e) {
+  return e && e.message ? String(e.message).slice(0, 200) : String(e).slice(0, 200);
+}
+
+// ---------- Simple storage ----------
+const mem = {};
+
+async function getJSON(key, fallback) {
+  try {
+    const raw = AS ? await AS.getItem(key) : mem[key];
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return fallback;
+}
+
+async function setJSON(key, value) {
+  try {
+    const raw = JSON.stringify(value);
+    if (AS) {
+      await AS.setItem(key, raw);
+    } else {
+      mem[key] = raw;
+    }
+  } catch (e) {}
+}
+
+async function removeKey(key) {
+  try {
+    if (AS) {
+      await AS.removeItem(key);
+    } else {
+      delete mem[key];
+    }
+  } catch (e) {}
+}
+
+export const DEFAULT_SETTINGS = {
+  theme: 'dark',
+  view: 'list', // list | grid2 | grid3
+  sort: 'title',
+  dir: 'asc',
+  shuffle: false,
+  repeat: 'off',
+};
+
+export async function loadSettings() {
+  const saved = await getJSON('mm_settings_v1', {});
+  return { ...DEFAULT_SETTINGS, ...saved };
+}
+
+export function saveSettings(settings) {
+  return setJSON('mm_settings_v1', settings);
+}
+
+// ---------- Permissions ----------
+export async function ensureMediaPermission() {
+  let perm = await MediaLibrary.getPermissionsAsync(false, ['audio']);
+  if (!perm.granted) {
+    perm = await MediaLibrary.requestPermissionsAsync(false, ['audio']);
+  }
+  return !!perm.granted;
+}
+
+export async function requestNotificationPermission() {
+  if (Platform.OS === 'android' && Platform.Version >= 33) {
+    try {
+      await PermissionsAndroid.request('android.permission.POST_NOTIFICATIONS');
+    } catch (e) {}
+  }
+}
+
+// ---------- Song info cache ----------
+// record = [title, artist, albumArtist, album, genre, year, track, disc, composer]
+let metaCache = {};
+const artMap = new Map(); // song id -> saved cover file uri, or null when the song has no cover
+let metaSaveTimer = null;
+let artSaveTimer = null;
+
+export async function loadCaches() {
+  metaCache = await getJSON('mm_meta_v2', {});
+  const art = await getJSON('mm_art_v1', {});
+  for (const id of Object.keys(art)) {
+    artMap.set(id, art[id] === 0 ? null : art[id]);
+  }
+}
+
+function persistMetaSoon() {
+  if (metaSaveTimer) return;
+  metaSaveTimer = setTimeout(() => {
+    metaSaveTimer = null;
+    setJSON('mm_meta_v2', metaCache);
+  }, 1500);
+}
+
+function persistArtSoon() {
+  if (artSaveTimer) return;
+  artSaveTimer = setTimeout(() => {
+    artSaveTimer = null;
+    const obj = {};
+    artMap.forEach((v, k) => {
+      obj[k] = v === null ? 0 : v;
+    });
+    setJSON('mm_art_v1', obj);
+  }, 2500);
+}
+
+export async function clearCaches() {
+  metaCache = {};
+  artMap.clear();
+  await removeKey('mm_meta_v2');
+  await removeKey('mm_art_v1');
+}
+
+function str(v) {
+  return v === null || v === undefined ? '' : String(v).trim();
+}
+
+function num(v) {
+  const n = parseInt(String(v), 10);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
+function makeRecord(d) {
+  return [
+    str(d.title),
+    str(d.artist),
+    str(d.albumArtist),
+    str(d.albumTitle),
+    str(d.genre),
+    num(d.year),
+    num(d.trackNumber),
+    num(d.discNumber),
+    str(d.composer),
+  ];
+}
+
+function applyRecord(song, rec) {
+  return {
+    ...song,
+    title: rec[0] || song.fileTitle,
+    artist: rec[1],
+    albumArtist: rec[2],
+    album: rec[3],
+    genre: rec[4],
+    year: rec[5],
+    track: rec[6],
+    disc: rec[7],
+    composer: rec[8],
+    hasMeta: true,
+  };
+}
+
+// ---------- Finding songs ----------
+export async function scanSongs() {
+  const list = [];
+  let after = undefined;
+  let hasNext = true;
+  while (hasNext) {
+    const page = await MediaLibrary.getAssetsAsync({
+      mediaType: MediaLibrary.MediaType.audio,
+      first: 1000,
+      after: after,
+    });
+    for (const a of page.assets) {
+      if (!(a.duration > 0) || a.duration >= MIN_SECONDS) {
+        const fileTitle = cleanTitle(a.filename);
+        const base = {
+          id: String(a.id),
+          uri: a.uri,
+          filename: a.filename || '',
+          fileTitle: fileTitle,
+          title: fileTitle,
+          artist: '',
+          albumArtist: '',
+          album: '',
+          genre: '',
+          year: 0,
+          track: 0,
+          disc: 0,
+          composer: '',
+          duration: a.duration || 0,
+          added: a.creationTime || a.modificationTime || 0,
+          hasMeta: false,
+        };
+        const rec = metaCache[base.id];
+        list.push(rec ? applyRecord(base, rec) : base);
+      }
+    }
+    hasNext = page.hasNextPage;
+    after = page.endCursor;
+  }
+  return list;
+}
+
+// ---------- Reading song info (artist, album, ...) ----------
+const FIELDS = [
+  'title',
+  'artist',
+  'albumArtist',
+  'albumTitle',
+  'genre',
+  'year',
+  'trackNumber',
+  'discNumber',
+  'composer',
+];
+
+async function readMany(uris) {
+  const map = new Map();
+  if (typeof Meta.getBulkMetadata === 'function') {
+    const res = await Meta.getBulkMetadata(uris, FIELDS);
+    const results = res && res.results ? res.results : [];
+    const errors = res && res.errors ? res.errors : [];
+    results.forEach((r) => {
+      if (r && r.uri) map.set(r.uri, r.data || {});
+    });
+    if (errors.length > 0) {
+      const first = errors[0] && errors[0].data ? errors[0].data : null;
+      diag.lastError = first ? str(first.name) + ': ' + str(first.message) : 'unknown error';
+    }
+    if (map.size === 0 && results.length === uris.length) {
+      results.forEach((r, i) => map.set(uris[i], (r && r.data) || {}));
+    }
+    return map;
+  }
+  for (const u of uris) {
+    try {
+      map.set(u, await Meta.getMetadata(u, FIELDS));
+    } catch (e) {
+      diag.lastError = errText(e);
+    }
+  }
+  return map;
+}
+
+// Reads info for songs that are not in the cache yet. Calls onUpdate now and then with the newest list.
+export async function enrichSongs(list, isCancelled, onUpdate) {
+  if (!Meta) return list;
+  const todo = [];
+  list.forEach((s, i) => {
+    if (!s.hasMeta) todo.push(i);
+  });
+  const out = list.slice();
+  if (todo.length === 0) return out;
+
+  const CHUNK = 40;
+  let chunkNo = 0;
+  for (let p = 0; p < todo.length; p += CHUNK) {
+    if (isCancelled()) return out;
+    const idxs = todo.slice(p, p + CHUNK);
+    const uris = idxs.map((i) => out[i].uri);
+    let map = null;
+    try {
+      map = await readMany(uris);
+    } catch (e) {
+      diag.lastError = errText(e);
+    }
+    idxs.forEach((i, k) => {
+      const d = map ? map.get(uris[k]) : null;
+      if (d) {
+        const rec = makeRecord(d);
+        metaCache[out[i].id] = rec;
+        out[i] = applyRecord(out[i], rec);
+        diag.metaOk++;
+      } else {
+        diag.metaFail++;
+      }
+    });
+    chunkNo++;
+    if (chunkNo % 5 === 0) {
+      persistMetaSoon();
+      if (onUpdate) onUpdate(out.slice(), Math.min(p + CHUNK, todo.length), todo.length);
+    }
+  }
+  persistMetaSoon();
+  return out;
+}
+
+// ---------- Cover art ----------
+export function getCachedArt(song) {
+  return artMap.has(song.id) ? artMap.get(song.id) : undefined;
+}
+
+export function invalidateArt(id) {
+  artMap.delete(id);
+}
+
+const artListeners = new Map(); // id -> Set of callbacks
+const artJobs = new Map(); // id -> song
+const artStack = []; // waiting ids, newest on top
+const artRunning = new Set();
+
+function fileUri(u) {
+  if (!u) return null;
+  return String(u).indexOf('://') >= 0 ? String(u) : 'file://' + u;
+}
+
+async function runArtJob(id) {
+  const song = artJobs.get(id);
+  let result = null;
+  if (song) {
+    try {
+      const opts = { compress: 0.8 };
+      if (Meta.SaveFormat && Meta.SaveFormat.JPEG) opts.format = Meta.SaveFormat.JPEG;
+      const saved = await Meta.saveArtwork(song.uri, opts);
+      result = fileUri(saved);
+      if (result) diag.artSaved++;
+      else diag.artNone++;
+    } catch (e) {
+      result = null;
+      diag.artFail++;
+      diag.lastArtError = errText(e);
+    }
+  }
+  artMap.set(id, result);
+  persistArtSoon();
+  const set = artListeners.get(id);
+  artListeners.delete(id);
+  artJobs.delete(id);
+  artRunning.delete(id);
+  if (set) {
+    set.forEach((cb) => {
+      try {
+        cb(result);
+      } catch (e) {}
+    });
+  }
+  pumpArt();
+}
+
+function pumpArt() {
+  while (artRunning.size < 3 && artStack.length > 0) {
+    const id = artStack.pop();
+    if (!artJobs.has(id)) continue;
+    artRunning.add(id);
+    runArtJob(id);
+  }
+}
+
+// Asks for a song's cover. Calls cb(uri or null) when ready. Returns a function that cancels.
+export function loadArt(song, cb) {
+  if (artMap.has(song.id)) {
+    cb(artMap.get(song.id));
+    return () => {};
+  }
+  if (!Meta || typeof Meta.saveArtwork !== 'function') {
+    cb(null);
+    return () => {};
+  }
+  let set = artListeners.get(song.id);
+  if (!set) {
+    set = new Set();
+    artListeners.set(song.id, set);
+    artJobs.set(song.id, song);
+    artStack.push(song.id);
+  } else if (!artRunning.has(song.id)) {
+    const at = artStack.indexOf(song.id);
+    if (at >= 0) artStack.splice(at, 1);
+    artStack.push(song.id);
+  }
+  set.add(cb);
+  pumpArt();
+  return () => {
+    const current = artListeners.get(song.id);
+    if (!current) return;
+    current.delete(cb);
+    if (current.size === 0 && !artRunning.has(song.id)) {
+      artListeners.delete(song.id);
+      artJobs.delete(song.id);
+      const at = artStack.indexOf(song.id);
+      if (at >= 0) artStack.splice(at, 1);
+    }
+  };
+}
+
+// ---------- Lyrics and details of one song ----------
+export async function fetchLyrics(uri) {
+  if (!Meta || typeof Meta.getLyric !== 'function') {
+    return { text: '', error: 'Lyrics reader is not part of this build.' };
+  }
+  try {
+    const text = await Meta.getLyric(uri);
+    return { text: text || '', error: '' };
+  } catch (e) {
+    return { text: '', error: errText(e) };
+  }
+}
+
+export async function fetchDetails(uri) {
+  if (!Meta || typeof Meta.getMetadata !== 'function') return null;
+  try {
+    return await Meta.getMetadata(uri, [
+      'title',
+      'artist',
+      'albumArtist',
+      'albumTitle',
+      'genre',
+      'year',
+      'trackNumber',
+      'totalTrackCount',
+      'discNumber',
+      'composer',
+      'bitrate',
+      'sampleRate',
+      'channelCount',
+      'codecs',
+    ]);
+  } catch (e) {
+    return { _error: errText(e) };
+  }
+}
