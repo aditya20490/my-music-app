@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import {
   View,
   Text,
+  Image,
   FlatList,
   TouchableOpacity,
   TextInput,
@@ -17,13 +18,22 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import * as MediaLibraryMain from 'expo-media-library';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
-let MediaLibrary = MediaLibraryMain;
-if (typeof MediaLibraryMain.getAssetsAsync !== 'function') {
-  try {
-    MediaLibrary = require('expo-media-library/legacy');
-  } catch (e) {}
+
+// The newest Expo moved the song-scanning functions into "expo-media-library/legacy".
+let MediaLibrary;
+try {
+  MediaLibrary = require('expo-media-library/legacy');
+} catch (e) {
+  MediaLibrary = require('expo-media-library');
+}
+
+// Reads artist, album and cover art from the song files (optional, app still works without it).
+let Meta = null;
+try {
+  Meta = require('@missingcore/react-native-metadata-retriever');
+} catch (e) {
+  Meta = null;
 }
 
 // Songs shorter than this (in seconds) are hidden, so ringtones don't show up.
@@ -67,9 +77,77 @@ function formatTime(seconds) {
   return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
-function Art({ title, size, radius }) {
-  const g = gradientFor(title || '?');
-  const letter = (title || '?').trim().charAt(0).toUpperCase() || '?';
+// ---------- Cover art loading (a few at a time, small cache) ----------
+const artCache = new Map();
+const artPending = new Map();
+const artQueue = [];
+let artActive = 0;
+
+function runArtQueue() {
+  while (artActive < 3 && artQueue.length > 0) {
+    const job = artQueue.shift();
+    artActive++;
+    job().finally(() => {
+      artActive--;
+      runArtQueue();
+    });
+  }
+}
+
+function loadArt(uri) {
+  if (!Meta || !Meta.getArtwork) return Promise.resolve(null);
+  if (artCache.has(uri)) return Promise.resolve(artCache.get(uri));
+  if (artPending.has(uri)) return artPending.get(uri);
+  const p = new Promise((resolve) => {
+    artQueue.push(async () => {
+      try {
+        const b64 = await Meta.getArtwork(uri);
+        const value = b64 ? 'data:image/jpeg;base64,' + b64 : null;
+        artCache.set(uri, value);
+        if (artCache.size > 60) {
+          artCache.delete(artCache.keys().next().value);
+        }
+        resolve(value);
+      } catch (e) {
+        artCache.set(uri, null);
+        resolve(null);
+      } finally {
+        artPending.delete(uri);
+      }
+    });
+    runArtQueue();
+  });
+  artPending.set(uri, p);
+  return p;
+}
+
+function Art({ song, size, radius }) {
+  const [img, setImg] = useState(artCache.has(song.uri) ? artCache.get(song.uri) : null);
+
+  useEffect(() => {
+    let alive = true;
+    setImg(artCache.has(song.uri) ? artCache.get(song.uri) : null);
+    loadArt(song.uri).then((v) => {
+      if (alive) setImg(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [song.uri]);
+
+  if (img) {
+    return (
+      <Image
+        source={{ uri: img }}
+        style={{ width: size, height: size, borderRadius: radius, backgroundColor: CARD }}
+        resizeMode="cover"
+        resizeMethod="resize"
+      />
+    );
+  }
+
+  const g = gradientFor(song.title || '?');
+  const letter = (song.title || '?').trim().charAt(0).toUpperCase() || '?';
   return (
     <LinearGradient
       colors={g}
@@ -91,14 +169,17 @@ function Art({ title, size, radius }) {
 }
 
 const SongRow = React.memo(function SongRow({ song, index, active, onPress }) {
+  const sub = (song.artist ? song.artist + '  •  ' : '') + formatTime(song.duration);
   return (
     <TouchableOpacity activeOpacity={0.7} style={styles.row} onPress={() => onPress(index)}>
-      <Art title={song.title} size={48} radius={12} />
+      <Art song={song} size={52} radius={12} />
       <View style={styles.rowText}>
         <Text style={[styles.rowTitle, active && { color: ACCENT }]} numberOfLines={1}>
           {song.title}
         </Text>
-        <Text style={styles.rowSub}>{formatTime(song.duration)}</Text>
+        <Text style={styles.rowSub} numberOfLines={1}>
+          {sub}
+        </Text>
       </View>
       {active ? <Ionicons name="musical-notes" size={20} color={ACCENT} /> : null}
     </TouchableOpacity>
@@ -149,6 +230,8 @@ function MusicApp() {
   const [permission, setPermission] = useState('checking'); // checking | granted | denied
   const [loading, setLoading] = useState(false);
   const [songs, setSongs] = useState([]);
+  const [scan, setScan] = useState(null); // { done, total } while reading song details
+  const [errorText, setErrorText] = useState('');
   const [query, setQuery] = useState('');
   const [queue, setQueue] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -157,11 +240,19 @@ function MusicApp() {
   const [repeat, setRepeat] = useState('off'); // off | all | one
 
   const historyRef = useRef([]);
+  const scanRef = useRef(0);
 
   const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
 
-  const current = currentIndex >= 0 ? queue[currentIndex] : null;
+  const songsById = useMemo(() => {
+    const m = {};
+    for (const s of songs) m[s.id] = s;
+    return m;
+  }, [songs]);
+
+  const queued = currentIndex >= 0 ? queue[currentIndex] : null;
+  const current = queued ? songsById[queued.id] || queued : null;
 
   // ---------- Start up: audio mode + permissions ----------
   useEffect(() => {
@@ -195,14 +286,18 @@ function MusicApp() {
         setPermission('denied');
       }
     } catch (e) {
+      setErrorText('Permission problem: ' + (e && e.message ? e.message : String(e)));
       setPermission('denied');
     }
   }
 
   async function loadSongs() {
+    const myScan = ++scanRef.current;
     setLoading(true);
+    setErrorText('');
+    setScan(null);
+    let list = [];
     try {
-      const all = [];
       let after = undefined;
       let hasNext = true;
       while (hasNext) {
@@ -212,29 +307,84 @@ function MusicApp() {
           after: after,
         });
         for (const a of page.assets) {
-          if (a.duration >= MIN_SECONDS) {
-            all.push({
+          if (!(a.duration > 0) || a.duration >= MIN_SECONDS) {
+            list.push({
               id: a.id,
               uri: a.uri,
               title: cleanTitle(a.filename),
-              duration: a.duration,
+              artist: '',
+              album: '',
+              duration: a.duration || 0,
             });
           }
         }
         hasNext = page.hasNextPage;
         after = page.endCursor;
       }
-      all.sort((x, y) => x.title.localeCompare(y.title));
-      setSongs(all);
-    } catch (e) {}
+      list.sort((x, y) => x.title.localeCompare(y.title));
+      setSongs(list);
+      if (list.length === 0) {
+        setErrorText('The phone returned 0 audio files. Tap "Scan again" or check the music permission.');
+      }
+    } catch (e) {
+      setErrorText('Could not read songs: ' + (e && e.message ? e.message : String(e)));
+    }
     setLoading(false);
+    if (list.length > 0) {
+      enrich(list, myScan);
+    }
+  }
+
+  // Reads artist / album / real title for every song in the background.
+  async function enrich(list, myScan) {
+    if (!Meta || !Meta.getMetadata) return;
+    const preset = Meta.MetadataPresets ? Meta.MetadataPresets.standard : undefined;
+    const out = list.slice();
+    const CHUNK = 16;
+    let okCount = 0;
+    for (let i = 0; i < out.length; i += CHUNK) {
+      if (scanRef.current !== myScan) return;
+      const part = out.slice(i, i + CHUNK);
+      await Promise.all(
+        part.map(async (s, k) => {
+          try {
+            const m = await Meta.getMetadata(s.uri, preset);
+            if (m) {
+              okCount++;
+              out[i + k] = {
+                ...s,
+                title: (m.title && String(m.title).trim()) || s.title,
+                artist: m.artist ? String(m.artist).trim() : '',
+                album: m.albumTitle ? String(m.albumTitle).trim() : '',
+              };
+            }
+          } catch (e) {}
+        })
+      );
+      setScan({ done: Math.min(i + CHUNK, out.length), total: out.length });
+      if ((i / CHUNK) % 12 === 11) {
+        setSongs(out.slice());
+      }
+    }
+    if (scanRef.current !== myScan) return;
+    out.sort((x, y) => x.title.localeCompare(y.title));
+    setSongs(out);
+    setScan(null);
+    if (okCount === 0) {
+      setErrorText('Artist names and covers could not be read from your files.');
+    }
   }
 
   // ---------- Search ----------
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return songs;
-    return songs.filter((s) => s.title.toLowerCase().includes(q));
+    return songs.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.artist.toLowerCase().includes(q) ||
+        s.album.toLowerCase().includes(q)
+    );
   }, [songs, query]);
 
   // ---------- Playback ----------
@@ -247,7 +397,11 @@ function MusicApp() {
       try {
         player.replace({ uri: song.uri });
         player.play();
-        player.setActiveForLockScreen(true, { title: song.title, artist: 'My Music' });
+        player.setActiveForLockScreen(true, {
+          title: song.title,
+          artist: song.artist || 'My Music',
+          albumTitle: song.album || undefined,
+        });
       } catch (e) {}
     },
     [player]
@@ -368,6 +522,7 @@ function MusicApp() {
         <Text style={styles.centerText}>
           I need permission to see the music on your phone, so I can play it.
         </Text>
+        {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
         <TouchableOpacity style={styles.primaryButton} onPress={ensurePermission}>
           <Text style={styles.primaryButtonText}>Allow access</Text>
         </TouchableOpacity>
@@ -378,6 +533,9 @@ function MusicApp() {
     );
   }
 
+  const headerSub =
+    songs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
+
   return (
     <View style={[styles.container, { paddingTop: insets.top + 12 }]}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
@@ -385,7 +543,7 @@ function MusicApp() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.bigTitle}>My Music</Text>
-        <Text style={styles.headerSub}>{songs.length} songs</Text>
+        <Text style={styles.headerSub}>{headerSub}</Text>
       </View>
 
       {/* Search */}
@@ -393,7 +551,7 @@ function MusicApp() {
         <Ionicons name="search" size={18} color={MUTED} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Search songs"
+          placeholder="Search songs, artists, albums"
           placeholderTextColor={MUTED}
           value={query}
           onChangeText={setQuery}
@@ -429,8 +587,10 @@ function MusicApp() {
         </TouchableOpacity>
       </View>
 
+      {errorText && songs.length > 0 ? <Text style={styles.noteText}>{errorText}</Text> : null}
+
       {/* Song list */}
-      {loading ? (
+      {loading && songs.length === 0 ? (
         <View style={styles.center}>
           <ActivityIndicator color={ACCENT} size="large" />
           <Text style={[styles.centerText, { marginTop: 12 }]}>Finding your music...</Text>
@@ -441,16 +601,28 @@ function MusicApp() {
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           extraData={currentId}
-          getItemLayout={(data, index) => ({ length: 64, offset: 64 * index, index })}
+          getItemLayout={(data, index) => ({ length: 68, offset: 68 * index, index })}
           initialNumToRender={20}
           maxToRenderPerBatch={20}
-          windowSize={10}
+          windowSize={7}
           removeClippedSubviews
+          refreshing={loading && songs.length > 0}
+          onRefresh={loadSongs}
           contentContainerStyle={{ paddingBottom: (current ? 96 : 24) + insets.bottom }}
           ListEmptyComponent={
-            <Text style={[styles.centerText, { marginTop: 40 }]}>
-              {songs.length === 0 ? 'No songs found on your phone.' : 'No songs match your search.'}
-            </Text>
+            <View style={{ alignItems: 'center', paddingHorizontal: 32, marginTop: 40 }}>
+              <Text style={styles.centerText}>
+                {songs.length === 0 ? 'No songs found yet.' : 'No songs match your search.'}
+              </Text>
+              {errorText && songs.length === 0 ? (
+                <Text style={styles.errorText}>{errorText}</Text>
+              ) : null}
+              {songs.length === 0 ? (
+                <TouchableOpacity style={styles.primaryButton} onPress={loadSongs}>
+                  <Text style={styles.primaryButtonText}>Scan again</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           }
         />
       )}
@@ -465,10 +637,17 @@ function MusicApp() {
           <View style={styles.miniProgressBg}>
             <View style={[styles.miniProgressFill, { width: progress * 100 + '%' }]} />
           </View>
-          <Art title={current.title} size={44} radius={10} />
-          <Text style={styles.miniTitle} numberOfLines={1}>
-            {current.title}
-          </Text>
+          <Art song={current} size={44} radius={10} />
+          <View style={styles.miniTextWrap}>
+            <Text style={styles.miniTitle} numberOfLines={1}>
+              {current.title}
+            </Text>
+            {current.artist ? (
+              <Text style={styles.miniArtist} numberOfLines={1}>
+                {current.artist}
+              </Text>
+            ) : null}
+          </View>
           <TouchableOpacity onPress={goPrev} style={styles.miniBtn}>
             <Ionicons name="play-skip-back" size={22} color={TEXT} />
           </TouchableOpacity>
@@ -506,12 +685,16 @@ function MusicApp() {
             </View>
 
             <View style={styles.fullArt}>
-              <Art title={current.title} size={artSize} radius={28} />
+              <Art song={current} size={artSize} radius={28} />
             </View>
 
             <View style={styles.fullInfo}>
               <Text style={styles.fullTitle} numberOfLines={2}>
                 {current.title}
+              </Text>
+              <Text style={styles.fullArtist} numberOfLines={1}>
+                {current.artist || 'Unknown artist'}
+                {current.album ? '  •  ' + current.album : ''}
               </Text>
               <Text style={styles.fullSub}>
                 {currentIndex + 1} of {queue.length}
@@ -575,6 +758,8 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   centerText: { color: MUTED, fontSize: 15, textAlign: 'center' },
+  errorText: { color: '#F87171', fontSize: 13, textAlign: 'center', marginTop: 14 },
+  noteText: { color: MUTED, fontSize: 12, marginHorizontal: 20, marginBottom: 6 },
 
   header: { paddingHorizontal: 20, marginBottom: 14 },
   bigTitle: { color: TEXT, fontSize: 32, fontWeight: '800' },
@@ -610,7 +795,7 @@ const styles = StyleSheet.create({
   actionText: { color: TEXT, fontSize: 16, fontWeight: '700' },
 
   row: {
-    height: 64,
+    height: 68,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
@@ -641,7 +826,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#2A2A35',
   },
   miniProgressFill: { height: 3, backgroundColor: ACCENT },
-  miniTitle: { flex: 1, color: TEXT, fontSize: 15, fontWeight: '600', marginLeft: 12 },
+  miniTextWrap: { flex: 1, marginLeft: 12 },
+  miniTitle: { color: TEXT, fontSize: 15, fontWeight: '600' },
+  miniArtist: { color: MUTED, fontSize: 12, marginTop: 2 },
   miniBtn: { paddingHorizontal: 8, paddingVertical: 8 },
 
   full: { flex: 1, paddingHorizontal: 28 },
@@ -655,7 +842,8 @@ const styles = StyleSheet.create({
   fullArt: { alignItems: 'center', marginTop: 28 },
   fullInfo: { marginTop: 32 },
   fullTitle: { color: TEXT, fontSize: 24, fontWeight: '800' },
-  fullSub: { color: MUTED, fontSize: 14, marginTop: 6 },
+  fullArtist: { color: '#D4D4DE', fontSize: 16, marginTop: 6 },
+  fullSub: { color: MUTED, fontSize: 13, marginTop: 6 },
   fullSeek: { marginTop: 24 },
 
   seekTouch: { height: 32, justifyContent: 'center' },
