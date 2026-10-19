@@ -93,7 +93,7 @@ export const SongRow = React.memo(function SongRow({ song, index, active, onPres
   );
 });
 
-// ---------- Grid view tile (big cover, name on top of it) ----------
+// ---------- Grid view tile (big cover, name at the very bottom, one line) ----------
 export const SongTile = React.memo(function SongTile({ song, index, active, onPress, size }) {
   const { t, s } = useTheme();
   return (
@@ -104,14 +104,9 @@ export const SongTile = React.memo(function SongTile({ song, index, active, onPr
     >
       <Art song={song} size={size} radius={0} />
       <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.82)']} style={s.tileScrim}>
-        <Text style={s.tileTitle} numberOfLines={2}>
+        <Text style={s.tileTitle} numberOfLines={1}>
           {song.title}
         </Text>
-        {song.artist ? (
-          <Text style={s.tileArtist} numberOfLines={1}>
-            {song.artist}
-          </Text>
-        ) : null}
       </LinearGradient>
       <View style={s.badge}>
         <Text style={s.badgeText}>{formatTime(song.duration)}</Text>
@@ -275,7 +270,8 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
         ? 'loaded'
         : 'NOT in this build' + (info.metaLoadError ? ' (' + info.metaLoadError + ')' : '')),
     'Details read OK: ' + info.metaOk + '   failed: ' + info.metaFail,
-    'Covers saved: ' + info.artSaved + '   no cover: ' + info.artNone + '   failed: ' + info.artFail,
+    'Covers saved: ' + info.artSaved + ' (backup reader: ' + info.artJs + ')   no cover: ' + info.artNone + '   failed: ' + info.artFail,
+    'Backup cover reader: ' + (info.backupReader ? 'available' : 'NOT in this build'),
   ];
   if (info.lastError) lines.push('Last details error: ' + info.lastError);
   if (info.lastArtError) lines.push('Last cover error: ' + info.lastArtError);
@@ -298,8 +294,7 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
             <Text style={s.sheetTitle}>View</Text>
             <View style={s.chipRow}>
               <Chip label="List" icon="list" active={settings.view === 'list'} onPress={() => onChange({ view: 'list' })} />
-              <Chip label="Grid 2" icon="grid" active={settings.view === 'grid2'} onPress={() => onChange({ view: 'grid2' })} />
-              <Chip label="Grid 3" icon="apps" active={settings.view === 'grid3'} onPress={() => onChange({ view: 'grid3' })} />
+              <Chip label="Grid" icon="apps" active={settings.view === 'grid3'} onPress={() => onChange({ view: 'grid3' })} />
             </View>
 
             <Text style={s.sheetTitle}>Sort songs by</Text>
