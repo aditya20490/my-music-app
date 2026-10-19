@@ -26,16 +26,17 @@ function buildInfoRows(song, d) {
     rows.push([label, text]);
   };
   const det = d && !d._error ? d : {};
-  add('Title', det.title || song.title);
-  add('Artist', det.artist || song.artist);
-  add('Album artist', det.albumArtist || song.albumArtist);
-  add('Album', det.albumTitle || song.album);
-  add('Genre', det.genre || song.genre);
-  add('Year', det.year || song.year);
-  const track = det.trackNumber || song.track;
+  const ed = !!song.edited; // your own changes win over what is stored in the file
+  add('Title', ed ? song.title : det.title || song.title);
+  add('Artist', ed ? song.artist : det.artist || song.artist);
+  add('Album artist', ed ? song.albumArtist : det.albumArtist || song.albumArtist);
+  add('Album', ed ? song.album : det.albumTitle || song.album);
+  add('Genre', ed ? song.genre : det.genre || song.genre);
+  add('Year', ed ? song.year : det.year || song.year);
+  const track = ed ? song.track : det.trackNumber || song.track;
   if (track) add('Track', det.totalTrackCount ? track + ' / ' + det.totalTrackCount : track);
-  add('Disc', det.discNumber || song.disc);
-  add('Composer', det.composer || song.composer);
+  add('Disc', ed ? song.disc : det.discNumber || song.disc);
+  add('Composer', ed ? song.composer : det.composer || song.composer);
   add('Length', song.duration ? formatTime(song.duration) : '');
   if (det.bitrate) add('Bitrate', Math.round(det.bitrate / 1000) + ' kbps');
   if (det.sampleRate) add('Sample rate', (det.sampleRate / 1000).toFixed(1) + ' kHz');
@@ -62,6 +63,7 @@ export default function NowPlaying({
   onNext,
   onTogglePlay,
   onSeek,
+  onEdit,
 }) {
   const { t, s } = useTheme();
   const insets = useSafeAreaInsets();
@@ -80,6 +82,10 @@ export default function NowPlaying({
     if (!visible || page !== 'lyrics' || !song) return undefined;
     let alive = true;
     lineY.current = {};
+    if (song.lyricsEdit !== undefined) {
+      setLyr({ id: song.id, loading: false, text: song.lyricsEdit, error: '' });
+      return undefined;
+    }
     setLyr({ id: song.id, loading: true, text: '', error: '' });
     fetchLyrics(song.uri).then((r) => {
       if (alive) setLyr({ id: song.id, loading: false, text: r.text, error: r.error });
@@ -87,7 +93,7 @@ export default function NowPlaying({
     return () => {
       alive = false;
     };
-  }, [visible, page, songId]);
+  }, [visible, page, songId, song ? song.lyricsEdit : undefined]);
 
   // Load technical details when the info page is open
   useEffect(() => {
@@ -143,7 +149,13 @@ export default function NowPlaying({
             <Ionicons name="chevron-down" size={30} color={t.text} />
           </TouchableOpacity>
           <Text style={s.fullTopTitle}>Now Playing</Text>
-          <View style={s.fullTopBtn} />
+          {onEdit ? (
+            <TouchableOpacity onPress={() => onEdit(song)} style={s.fullTopBtn}>
+              <Ionicons name="create-outline" size={24} color={t.text} />
+            </TouchableOpacity>
+          ) : (
+            <View style={s.fullTopBtn} />
+          )}
         </View>
 
         {/* Middle area: cover, lyrics or info */}
