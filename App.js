@@ -34,6 +34,7 @@ import NowPlaying from './src/NowPlaying';
 
 const PAD = 16;
 const GAP = 12;
+const GRID_GAP = 2; // tiny gap between grid tiles, none at the screen edges
 
 const TABS = [
   { key: 'songs', label: 'Songs', icon: 'musical-notes' },
@@ -330,7 +331,7 @@ function MusicApp({ settings, updateSettings }) {
 
   function cycleView() {
     const v = settings.view;
-    updateSettings({ view: v === 'list' ? 'grid2' : v === 'grid2' ? 'grid3' : 'list' });
+    updateSettings({ view: v === 'list' ? 'grid3' : 'list' });
   }
 
   const duration = status.duration || (current ? current.duration : 0) || 0;
@@ -338,9 +339,9 @@ function MusicApp({ settings, updateSettings }) {
   const currentId = current ? current.id : null;
 
   // ---------- Layout numbers ----------
-  const columns = settings.view === 'grid3' ? 3 : settings.view === 'grid2' ? 2 : 1;
+  const columns = settings.view === 'list' ? 1 : 3;
   const gridMode = columns > 1;
-  const tileSize = Math.floor((width - PAD * 2 - GAP * (columns - 1)) / columns);
+  const tileSize = Math.floor((width - GRID_GAP * (columns - 1)) / columns);
   const albumSize = Math.floor((width - PAD * 2 - GAP) / 2);
   const listBottom = (current ? 96 : 24) + insets.bottom;
 
@@ -403,7 +404,7 @@ function MusicApp({ settings, updateSettings }) {
   const withDetails = songs.filter((x) => x.hasMeta).length;
   const headerSub =
     songs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
-  const viewIcon = settings.view === 'list' ? 'list' : settings.view === 'grid2' ? 'grid' : 'apps';
+  const viewIcon = settings.view === 'list' ? 'list' : 'apps';
 
   const emptyBlock = (
     <View style={s.emptyWrap}>
@@ -436,7 +437,7 @@ function MusicApp({ settings, updateSettings }) {
         renderItem={renderSong}
         extraData={currentId}
         numColumns={columns}
-        columnWrapperStyle={gridMode ? { gap: GAP, paddingHorizontal: PAD } : undefined}
+        columnWrapperStyle={gridMode ? { gap: GRID_GAP, marginBottom: GRID_GAP } : undefined}
         getItemLayout={gridMode ? undefined : (data, index) => ({ length: ROW_H, offset: ROW_H * index, index })}
         initialNumToRender={gridMode ? 12 : 16}
         maxToRenderPerBatch={12}
@@ -444,7 +445,7 @@ function MusicApp({ settings, updateSettings }) {
         removeClippedSubviews
         refreshing={loading && songs.length > 0}
         onRefresh={loadSongs}
-        contentContainerStyle={{ paddingBottom: listBottom, paddingTop: gridMode ? 4 : 0 }}
+        contentContainerStyle={{ paddingBottom: listBottom, paddingTop: gridMode ? 2 : 0 }}
         ListEmptyComponent={emptyBlock}
       />
     );
