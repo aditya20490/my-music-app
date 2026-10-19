@@ -18,6 +18,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 
 import { ThemeContext, getTheme, makeStyles, useTheme } from './src/theme';
 import * as Lib from './src/library';
+import * as Collections from './src/collections';
 import { sortSongs, groupSongs } from './src/utils';
 import {
   Art,
@@ -32,6 +33,7 @@ import {
 } from './src/ui';
 import NowPlaying from './src/NowPlaying';
 import EditSong from './src/EditSong';
+import FastScroll from './src/FastScroll';
 
 const PAD = 16;
 const GAP = 12;
@@ -41,7 +43,27 @@ const TABS = [
   { key: 'songs', label: 'Songs', icon: 'musical-notes' },
   { key: 'albums', label: 'Albums', icon: 'albums' },
   { key: 'artists', label: 'Artists', icon: 'person' },
+  { key: 'favs', label: 'Favorites', icon: 'heart' },
 ];
+
+// Mixes a list into a random order. If firstId is given, that song goes first.
+function shuffleList(list, firstId) {
+  const arr = list.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = tmp;
+  }
+  if (firstId !== null && firstId !== undefined) {
+    const at = arr.findIndex((x) => x.id === firstId);
+    if (at > 0) {
+      const item = arr.splice(at, 1)[0];
+      arr.unshift(item);
+    }
+  }
+  return arr;
+}
 
 function MusicApp({ settings, updateSettings }) {
   const { t, s } = useTheme();
@@ -61,10 +83,16 @@ function MusicApp({ settings, updateSettings }) {
   const [playerOpen, setPlayerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editSong, setEditSong] = useState(null);
+  const [favs, setFavs] = useState(() => new Set()); // favorite song ids (saved inside the app only)
+  const [hidden, setHidden] = useState(() => new Set()); // hidden album keys (saved inside the app only)
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState({});
 
-  const historyRef = useRef([]);
+  const originalRef = useRef([]); // the song order before shuffle was turned on
   const scanRef = useRef(0);
   const playingIdRef = useRef(null);
+  const listRef = useRef(null);
+  const fastRef = useRef(null);
 
   const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
@@ -88,14 +116,24 @@ function MusicApp({ settings, updateSettings }) {
           interruptionMode: 'doNotMix',
         });
       } catch (e) {}
+      try {
+        const c = await Collections.loadCollections();
+        setFavs(c.favs);
+        setHidden(c.hidden);
+      } catch (e) {}
       await Lib.loadCaches();
       await ensurePermission();
     })();
   }, []);
 
-  // Android back button closes the album / artist page
+  // Android back button: cancels selecting, or closes the album / artist page
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (selecting) {
+        setSelecting(false);
+        setSelected({});
+        return true;
+      }
       if (openGroup) {
         setOpenGroup(null);
         return true;
@@ -103,7 +141,20 @@ function MusicApp({ settings, updateSettings }) {
       return false;
     });
     return () => sub.remove();
-  }, [openGroup]);
+  }, [openGroup, selecting]);
+
+  // Leaving the Albums tab cancels selecting
+  useEffect(() => {
+    if (tab !== 'albums') {
+      setSelecting(false);
+      setSelected({});
+    }
+  }, [tab]);
+
+  // Un-selecting the last album ends selecting
+  useEffect(() => {
+    if (selecting && Object.keys(selected).length === 0) setSelecting(false);
+  }, [selected, selecting]);
 
   async function ensurePermission() {
     try {
@@ -167,10 +218,54 @@ function MusicApp({ settings, updateSettings }) {
     loadSongs();
   }
 
+  // ---------- Favorites ----------
+  const toggleFav = useCallback((id) => {
+    setFavs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      Collections.saveFavs(next);
+      return next;
+    });
+  }, []);
+
+  // ---------- Hidden albums ----------
+  const allAlbums = useMemo(() => (hidden.size > 0 ? groupSongs(songs, 'album') : []), [songs, hidden]);
+  const hiddenAlbumList = useMemo(() => allAlbums.filter((g) => hidden.has(g.key)), [allAlbums, hidden]);
+
+  // Songs that are not inside a hidden album
+  const shownSongs = useMemo(() => {
+    if (hiddenAlbumList.length === 0) return songs;
+    const ids = new Set();
+    hiddenAlbumList.forEach((g) => g.songs.forEach((x) => ids.add(x.id)));
+    return songs.filter((x) => !ids.has(x.id));
+  }, [songs, hiddenAlbumList]);
+
+  function hideSelected() {
+    const next = new Set(hidden);
+    Object.keys(selected).forEach((k) => next.add(k));
+    setHidden(next);
+    Collections.saveHidden(next);
+    setSelecting(false);
+    setSelected({});
+  }
+
+  function unhideAlbum(key) {
+    const next = new Set(hidden);
+    next.delete(key);
+    setHidden(next);
+    Collections.saveHidden(next);
+  }
+
+  function cancelSelect() {
+    setSelecting(false);
+    setSelected({});
+  }
+
   // ---------- Lists ----------
   const sorted = useMemo(
-    () => sortSongs(songs, settings.sort, settings.dir),
-    [songs, settings.sort, settings.dir]
+    () => sortSongs(shownSongs, settings.sort, settings.dir),
+    [shownSongs, settings.sort, settings.dir]
   );
 
   const filtered = useMemo(() => {
@@ -185,10 +280,15 @@ function MusicApp({ settings, updateSettings }) {
     );
   }, [sorted, query]);
 
+  const favSongs = useMemo(() => filtered.filter((x) => favs.has(x.id)), [filtered, favs]);
+
+  // The songs shown on the current tab (Songs or Favorites)
+  const songList = tab === 'favs' ? favSongs : filtered;
+
   const needAlbums = tab === 'albums' || (openGroup && openGroup.type === 'album');
   const needArtists = tab === 'artists' || (openGroup && openGroup.type === 'artist');
-  const albums = useMemo(() => (needAlbums ? groupSongs(songs, 'album') : []), [songs, needAlbums]);
-  const artists = useMemo(() => (needArtists ? groupSongs(songs, 'artist') : []), [songs, needArtists]);
+  const albums = useMemo(() => (needAlbums ? groupSongs(shownSongs, 'album') : []), [shownSongs, needAlbums]);
+  const artists = useMemo(() => (needArtists ? groupSongs(shownSongs, 'artist') : []), [shownSongs, needArtists]);
 
   const visibleAlbums = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -238,29 +338,32 @@ function MusicApp({ settings, updateSettings }) {
     [player]
   );
 
+  // Tapping a song plays the list in its normal order (shuffle is switched off)
   const onSongPress = useCallback(
     (index) => {
-      historyRef.current = [];
-      playAt(filtered, index);
+      originalRef.current = songList;
+      if (settings.shuffle) updateSettings({ shuffle: false });
+      playAt(songList, index);
     },
-    [filtered, playAt]
+    [songList, playAt, settings.shuffle, updateSettings]
   );
 
   const onGroupSongPress = useCallback(
     (index) => {
       if (!openedGroup) return;
-      historyRef.current = [];
+      originalRef.current = openedGroup.songs;
+      if (settings.shuffle) updateSettings({ shuffle: false });
       playAt(openedGroup.songs, index);
     },
-    [openedGroup, playAt]
+    [openedGroup, playAt, settings.shuffle, updateSettings]
   );
 
   // Long press a song to edit it
   const onSongLong = useCallback(
     (index) => {
-      if (filtered[index]) setEditSong(filtered[index]);
+      if (songList[index]) setEditSong(songList[index]);
     },
-    [filtered]
+    [songList]
   );
 
   const onGroupSongLong = useCallback(
@@ -276,15 +379,35 @@ function MusicApp({ settings, updateSettings }) {
 
   function playList(list, shuffleMode) {
     if (list.length === 0) return;
-    historyRef.current = [];
+    originalRef.current = list;
     updateSettings({ shuffle: shuffleMode });
-    const idx = shuffleMode ? Math.floor(Math.random() * list.length) : 0;
-    playAt(list, idx);
+    if (shuffleMode) {
+      playAt(shuffleList(list, null), 0);
+    } else {
+      playAt(list, 0);
+    }
+  }
+
+  // The shuffle button inside the player
+  function toggleShuffle() {
+    const turnOn = !settings.shuffle;
+    updateSettings({ shuffle: turnOn });
+    if (!current || queue.length === 0) return;
+    if (turnOn) {
+      originalRef.current = queue;
+      setQueue(shuffleList(queue, current.id));
+      setCurrentIndex(0);
+    } else {
+      const orig = originalRef.current.length > 0 ? originalRef.current : queue;
+      const at = orig.findIndex((x) => x.id === current.id);
+      setQueue(orig);
+      setCurrentIndex(at >= 0 ? at : 0);
+    }
   }
 
   function togglePlay() {
     if (!current) {
-      playList(filtered, false);
+      playList(songList, false);
       return;
     }
     if (status.playing) {
@@ -294,6 +417,7 @@ function MusicApp({ settings, updateSettings }) {
     }
   }
 
+  // Next song: always the next one in the queue order
   function goNext(auto) {
     if (queue.length === 0) return;
     if (auto && settings.repeat === 'one') {
@@ -301,36 +425,25 @@ function MusicApp({ settings, updateSettings }) {
       player.play();
       return;
     }
-    let nextIdx;
-    if (settings.shuffle && queue.length > 1) {
-      do {
-        nextIdx = Math.floor(Math.random() * queue.length);
-      } while (nextIdx === currentIndex);
-    } else {
-      nextIdx = currentIndex + 1;
-      if (nextIdx >= queue.length) {
-        if (settings.repeat === 'all' || !auto) {
-          nextIdx = 0;
-        } else {
-          player.pause();
-          player.seekTo(0);
-          return;
-        }
+    let nextIdx = currentIndex + 1;
+    if (nextIdx >= queue.length) {
+      if (settings.repeat === 'all' || !auto) {
+        nextIdx = 0;
+      } else {
+        player.pause();
+        player.seekTo(0);
+        return;
       }
     }
-    historyRef.current.push(currentIndex);
     playAt(queue, nextIdx);
   }
 
-  function goPrev() {
+  // Previous song: the one before it in the queue order.
+  // The button restarts the song first if it already played for 3 seconds. A swipe always goes back (force = true).
+  function goPrev(force) {
     if (queue.length === 0) return;
-    if (status.currentTime > 3) {
+    if (!force && status.currentTime > 3) {
       player.seekTo(0);
-      return;
-    }
-    if (historyRef.current.length > 0) {
-      const prevIdx = historyRef.current.pop();
-      playAt(queue, prevIdx);
       return;
     }
     let prevIdx = currentIndex - 1;
@@ -359,12 +472,26 @@ function MusicApp({ settings, updateSettings }) {
   const progress = duration > 0 ? Math.min(1, status.currentTime / duration) : 0;
   const currentId = current ? current.id : null;
 
+  // ---------- Slide bar ----------
+  const onListScroll = useCallback((e) => {
+    const n = e.nativeEvent;
+    if (fastRef.current) {
+      fastRef.current.update(n.contentOffset.y, n.contentSize.height, n.layoutMeasurement.height);
+    }
+  }, []);
+
+  const jumpTo = useCallback((offset) => {
+    if (listRef.current) listRef.current.scrollToOffset({ offset: offset, animated: false });
+  }, []);
+
   // ---------- Layout numbers ----------
-  const columns = settings.view === 'list' ? 1 : 3;
-  const gridMode = columns > 1;
+  const gridMode = tab === 'songs' && settings.view !== 'list';
+  const columns = gridMode ? 3 : 1;
   const tileSize = Math.floor((width - GRID_GAP * (columns - 1)) / columns);
   const albumSize = Math.floor((width - PAD * 2 - GAP) / 2);
   const listBottom = (current ? 96 : 24) + insets.bottom;
+
+  const listExtra = useMemo(() => ({ currentId, favs }), [currentId, favs]);
 
   const renderSong = useCallback(
     ({ item, index }) =>
@@ -384,9 +511,11 @@ function MusicApp({ settings, updateSettings }) {
           active={item.id === currentId}
           onPress={onSongPress}
           onLongPress={onSongLong}
+          fav={favs.has(item.id)}
+          onFav={toggleFav}
         />
       ),
-    [currentId, onSongPress, onSongLong, gridMode, tileSize]
+    [currentId, onSongPress, onSongLong, gridMode, tileSize, favs, toggleFav]
   );
 
   const renderGroupSong = useCallback(
@@ -397,19 +526,59 @@ function MusicApp({ settings, updateSettings }) {
         active={item.id === currentId}
         onPress={onGroupSongPress}
         onLongPress={onGroupSongLong}
+        fav={favs.has(item.id)}
+        onFav={toggleFav}
       />
     ),
-    [currentId, onGroupSongPress, onGroupSongLong]
+    [currentId, onGroupSongPress, onGroupSongLong, favs, toggleFav]
   );
 
-  const openAlbum = useCallback((g) => setOpenGroup({ type: 'album', key: g.key }), []);
+  // Albums: tap opens (or selects while selecting), long press starts selecting
+  const onAlbumPress = useCallback(
+    (g) => {
+      if (selecting) {
+        setSelected((prev) => {
+          const n = { ...prev };
+          if (n[g.key]) delete n[g.key];
+          else n[g.key] = true;
+          return n;
+        });
+      } else {
+        setOpenGroup({ type: 'album', key: g.key });
+      }
+    },
+    [selecting]
+  );
+
+  const onAlbumLong = useCallback((g) => {
+    setSelecting(true);
+    setSelected((prev) => ({ ...prev, [g.key]: true }));
+  }, []);
+
   const openArtist = useCallback((g) => setOpenGroup({ type: 'artist', key: g.key }), []);
 
   const renderAlbum = useCallback(
-    ({ item }) => <GroupTile group={item} size={albumSize} onPress={openAlbum} />,
-    [albumSize, openAlbum]
+    ({ item }) => (
+      <GroupTile
+        group={item}
+        size={albumSize}
+        onPress={onAlbumPress}
+        onLongPress={onAlbumLong}
+        selecting={selecting}
+        selected={!!selected[item.key]}
+      />
+    ),
+    [albumSize, onAlbumPress, onAlbumLong, selecting, selected]
   );
   const renderArtist = useCallback(({ item }) => <ArtistRow group={item} onPress={openArtist} />, [openArtist]);
+
+  function selectAllAlbums() {
+    const all = {};
+    visibleAlbums.forEach((g) => {
+      all[g.key] = true;
+    });
+    setSelected(all);
+  }
 
   // ---------- Screens ----------
   const barStyle = t.isDark ? 'light-content' : 'dark-content';
@@ -443,14 +612,17 @@ function MusicApp({ settings, updateSettings }) {
 
   const withDetails = songs.filter((x) => x.hasMeta).length;
   const headerSub =
-    songs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
+    shownSongs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
   const viewIcon = settings.view === 'list' ? 'list' : 'apps';
+
+  let emptyText = 'Nothing matches your search.';
+  if (songs.length === 0) emptyText = 'No songs found yet.';
+  else if (shownSongs.length === 0) emptyText = 'All your albums are hidden. Show them again in Options.';
+  else if (tab === 'favs' && query.trim() === '') emptyText = 'No favorites yet. Tap the heart on a song.';
 
   const emptyBlock = (
     <View style={s.emptyWrap}>
-      <Text style={s.centerText}>
-        {songs.length === 0 ? 'No songs found yet.' : 'Nothing matches your search.'}
-      </Text>
+      <Text style={s.centerText}>{emptyText}</Text>
       {errorText && songs.length === 0 ? <Text style={s.errorText}>{errorText}</Text> : null}
       {songs.length === 0 ? (
         <TouchableOpacity style={s.primaryButton} onPress={loadSongs}>
@@ -501,9 +673,9 @@ function MusicApp({ settings, updateSettings }) {
 
       <Segmented items={TABS} value={tab} onChange={setTab} />
 
-      {tab === 'songs' ? (
+      {tab === 'songs' || tab === 'favs' ? (
         <View style={s.actionRow}>
-          <TouchableOpacity style={{ flex: 1 }} onPress={() => playList(filtered, false)} activeOpacity={0.8}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => playList(songList, false)} activeOpacity={0.8}>
             <LinearGradient
               colors={[t.accent, t.accent2]}
               start={{ x: 0, y: 0 }}
@@ -516,7 +688,7 @@ function MusicApp({ settings, updateSettings }) {
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.actionButton, s.actionButtonDark, { flex: 1 }]}
-            onPress={() => playList(filtered, true)}
+            onPress={() => playList(songList, true)}
             activeOpacity={0.8}
           >
             <Ionicons name="shuffle" size={18} color={t.text} />
@@ -524,6 +696,8 @@ function MusicApp({ settings, updateSettings }) {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      {tab === 'albums' ? <Text style={s.noteText}>Tip: long-press an album to select it, then hide it.</Text> : null}
 
       {errorText && songs.length > 0 ? <Text style={s.noteText}>{errorText}</Text> : null}
     </View>
@@ -540,14 +714,15 @@ function MusicApp({ settings, updateSettings }) {
         </View>
       </View>
     );
-  } else if (tab === 'songs') {
+  } else if (tab === 'songs' || tab === 'favs') {
     body = (
       <FlatList
-        key={'songs-' + columns}
-        data={filtered}
+        ref={listRef}
+        key={'songs-' + tab + '-' + columns}
+        data={songList}
         keyExtractor={(item) => item.id}
         renderItem={renderSong}
-        extraData={currentId}
+        extraData={listExtra}
         numColumns={columns}
         keyboardShouldPersistTaps="handled"
         columnWrapperStyle={gridMode ? { gap: GRID_GAP, marginBottom: GRID_GAP } : undefined}
@@ -557,6 +732,8 @@ function MusicApp({ settings, updateSettings }) {
         removeClippedSubviews
         refreshing={loading && songs.length > 0}
         onRefresh={loadSongs}
+        onScroll={onListScroll}
+        scrollEventThrottle={16}
         contentContainerStyle={{ paddingBottom: listBottom }}
         ListHeaderComponent={header}
         ListEmptyComponent={emptyBlock}
@@ -565,10 +742,12 @@ function MusicApp({ settings, updateSettings }) {
   } else if (tab === 'albums') {
     body = (
       <FlatList
+        ref={listRef}
         key="albums"
         data={visibleAlbums}
         keyExtractor={(item) => item.key}
         renderItem={renderAlbum}
+        extraData={selected}
         numColumns={2}
         keyboardShouldPersistTaps="handled"
         columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
@@ -576,6 +755,8 @@ function MusicApp({ settings, updateSettings }) {
         maxToRenderPerBatch={8}
         windowSize={5}
         removeClippedSubviews
+        onScroll={onListScroll}
+        scrollEventThrottle={16}
         contentContainerStyle={{ paddingBottom: listBottom }}
         ListHeaderComponent={header}
         ListEmptyComponent={emptyBlock}
@@ -584,6 +765,7 @@ function MusicApp({ settings, updateSettings }) {
   } else {
     body = (
       <FlatList
+        ref={listRef}
         key="artists"
         data={visibleArtists}
         keyExtractor={(item) => item.key}
@@ -592,6 +774,8 @@ function MusicApp({ settings, updateSettings }) {
         initialNumToRender={16}
         windowSize={5}
         removeClippedSubviews
+        onScroll={onListScroll}
+        scrollEventThrottle={16}
         contentContainerStyle={{ paddingBottom: listBottom }}
         ListHeaderComponent={header}
         ListEmptyComponent={emptyBlock}
@@ -605,6 +789,54 @@ function MusicApp({ settings, updateSettings }) {
 
       {body}
 
+      {/* Slide bar on the right edge */}
+      <FastScroll ref={fastRef} top={insets.top + 12} bottom={listBottom} onJump={jumpTo} />
+
+      {/* Bar shown while selecting albums */}
+      {selecting && tab === 'albums' ? (
+        <View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            paddingTop: insets.top + 8,
+            paddingBottom: 10,
+            paddingHorizontal: 12,
+            backgroundColor: t.card,
+            flexDirection: 'row',
+            alignItems: 'center',
+            zIndex: 20,
+            elevation: 20,
+          }}
+        >
+          <TouchableOpacity style={s.headerBtn} onPress={cancelSelect}>
+            <Ionicons name="close" size={22} color={t.text} />
+          </TouchableOpacity>
+          <Text style={{ flex: 1, color: t.text, fontSize: 16, fontWeight: '800', marginLeft: 12 }}>
+            {Object.keys(selected).length + ' selected'}
+          </Text>
+          <TouchableOpacity onPress={selectAllAlbums} style={{ paddingHorizontal: 12, height: 38, justifyContent: 'center' }}>
+            <Text style={{ color: t.accent, fontSize: 14, fontWeight: '800' }}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={hideSelected}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 16,
+              height: 38,
+              borderRadius: 19,
+              backgroundColor: t.accent,
+            }}
+          >
+            <Ionicons name="eye-off" size={18} color={t.onAccent} />
+            <Text style={{ color: t.onAccent, fontSize: 14, fontWeight: '800' }}>Hide</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       {/* Album / artist page */}
       {openedGroup ? (
         <View style={[s.overlay, { paddingTop: insets.top + 8 }]}>
@@ -617,7 +849,7 @@ function MusicApp({ settings, updateSettings }) {
             data={openedGroup.songs}
             keyExtractor={(item) => item.id}
             renderItem={renderGroupSong}
-            extraData={currentId}
+            extraData={listExtra}
             getItemLayout={(data, index) => ({ length: ROW_H, offset: ROW_H * index, index })}
             windowSize={5}
             contentContainerStyle={{ paddingBottom: listBottom }}
@@ -671,7 +903,7 @@ function MusicApp({ settings, updateSettings }) {
           playing={status.playing}
           bottom={insets.bottom + 8}
           onOpen={() => setPlayerOpen(true)}
-          onPrev={goPrev}
+          onPrev={() => goPrev(false)}
           onToggle={togglePlay}
           onNext={() => goNext(false)}
         />
@@ -688,9 +920,14 @@ function MusicApp({ settings, updateSettings }) {
         duration={duration}
         shuffle={settings.shuffle}
         repeat={settings.repeat}
-        onToggleShuffle={() => updateSettings({ shuffle: !settings.shuffle })}
+        isFav={current ? favs.has(current.id) : false}
+        onToggleFav={() => {
+          if (current) toggleFav(current.id);
+        }}
+        onToggleShuffle={toggleShuffle}
         onCycleRepeat={cycleRepeat}
-        onPrev={goPrev}
+        onPrev={() => goPrev(false)}
+        onSwipePrev={() => goPrev(true)}
         onNext={() => goNext(false)}
         onTogglePlay={togglePlay}
         onSeek={(sec) => player.seekTo(sec)}
@@ -711,6 +948,8 @@ function MusicApp({ settings, updateSettings }) {
         onChange={updateSettings}
         info={{ ...Lib.getDiagnostics(), songCount: songs.length, withDetails }}
         onRescan={rescan}
+        hiddenAlbums={hiddenAlbumList}
+        onUnhide={unhideAlbum}
       />
     </View>
   );
