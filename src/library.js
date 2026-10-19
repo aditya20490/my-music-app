@@ -2,6 +2,8 @@
 import { Platform, PermissionsAndroid } from 'react-native';
 import { cleanTitle } from './utils';
 import { extractEmbeddedArt, EMBEDDED_ART_AVAILABLE } from './embeddedArt';
+import { readTagsJs, TAG_READER_AVAILABLE } from './tagReader';
+import { loadEdits, withEdit, getEditCover } from './edits';
 
 // The newest Expo keeps the song-scanning functions in "expo-media-library/legacy".
 let MediaLibrary = null;
@@ -45,7 +47,10 @@ const diag = {
   metaLoadError: metaLoadError,
   metaFunctions: Meta ? Object.keys(Meta).join(', ') : '',
   metaOk: 0,
+  metaJs: 0,
+  metaNone: 0,
   metaFail: 0,
+  tagReader: TAG_READER_AVAILABLE,
   lastError: '',
   artSaved: 0,
   artNone: 0,
@@ -142,7 +147,9 @@ const artSoft = new Set(); // ids whose cover failed with an error (not saved as
 const skipLib = new Set(); // ids where the library's cover file was broken, use backup reader
 
 export async function loadCaches() {
-  metaCache = await getJSON('mm_meta_v2', {});
+  metaCache = await getJSON('mm_meta_v3', {});
+  await removeKey('mm_meta_v2'); // old cache could hold empty details
+  await loadEdits();
   await removeKey('mm_art_v1'); // old cache could hold "no cover" from builds that failed
   const art = await getJSON('mm_art_v2', {});
   for (const id of Object.keys(art)) {
@@ -154,7 +161,7 @@ function persistMetaSoon() {
   if (metaSaveTimer) return;
   metaSaveTimer = setTimeout(() => {
     metaSaveTimer = null;
-    setJSON('mm_meta_v2', metaCache);
+    setJSON('mm_meta_v3', metaCache);
   }, 1500);
 }
 
@@ -171,10 +178,12 @@ function persistArtSoon() {
   }, 2500);
 }
 
+// Rescan: forgets what was read from the files. Your own edits are kept.
 export async function clearCaches() {
   metaCache = {};
   artMap.clear();
   await removeKey('mm_meta_v2');
+  await removeKey('mm_meta_v3');
   await removeKey('mm_art_v1');
   await removeKey('mm_art_v2');
 }
@@ -251,7 +260,7 @@ export async function scanSongs() {
           hasMeta: false,
         };
         const rec = metaCache[base.id];
-        list.push(rec ? applyRecord(base, rec) : base);
+        list.push(withEdit(rec ? applyRecord(base, rec) : base));
       }
     }
     hasNext = page.hasNextPage;
@@ -301,9 +310,37 @@ async function readMany(uris) {
   return map;
 }
 
+function hasContent(rec) {
+  return !!(rec[0] || rec[1] || rec[2] || rec[3] || rec[4] || rec[5]);
+}
+
+// Puts the original details back on a song, then puts your own changes on top.
+export function refreshSong(song) {
+  const rec = metaCache[song.id];
+  let base = { ...song, edited: false, coverKey: undefined, lyricsEdit: undefined };
+  if (rec) {
+    base = applyRecord(base, rec);
+  } else {
+    base = {
+      ...base,
+      title: song.fileTitle,
+      artist: '',
+      albumArtist: '',
+      album: '',
+      genre: '',
+      year: 0,
+      track: 0,
+      disc: 0,
+      composer: '',
+    };
+  }
+  return withEdit(base);
+}
+
 // Reads info for songs that are not in the cache yet. Calls onUpdate now and then with the newest list.
+// First the song details library is asked. Songs it could not read are read by the backup reader.
 export async function enrichSongs(list, isCancelled, onUpdate) {
-  if (!Meta) return list;
+  if (!Meta && !TAG_READER_AVAILABLE) return list;
   const todo = [];
   list.forEach((s, i) => {
     if (!s.hasMeta) todo.push(i);
@@ -317,25 +354,70 @@ export async function enrichSongs(list, isCancelled, onUpdate) {
     if (isCancelled()) return out;
     const idxs = todo.slice(p, p + CHUNK);
     const uris = idxs.map((i) => out[i].uri);
-    let map = null;
-    try {
-      map = await readMany(uris);
-    } catch (e) {
-      diag.lastError = errText(e);
+    const recs = new Array(idxs.length).fill(null);
+    const checked = new Array(idxs.length).fill(false); // true when some reader really looked at the file
+
+    if (Meta) {
+      try {
+        const map = await readMany(uris);
+        idxs.forEach((i, k) => {
+          const d = map.get(uris[k]);
+          if (d) {
+            checked[k] = true;
+            const rec = makeRecord(d);
+            if (hasContent(rec)) {
+              recs[k] = rec;
+              diag.metaOk++;
+            }
+          }
+        });
+      } catch (e) {
+        diag.lastError = errText(e);
+      }
     }
+
+    if (TAG_READER_AVAILABLE) {
+      const need = [];
+      recs.forEach((r, k) => {
+        if (!r) need.push(k);
+      });
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < need.length) {
+          const k = need[cursor++];
+          try {
+            const d = await readTagsJs(out[idxs[k]]);
+            checked[k] = true;
+            if (d) {
+              const rec = makeRecord(d);
+              if (hasContent(rec)) {
+                recs[k] = rec;
+                diag.metaJs++;
+              }
+            }
+          } catch (e) {
+            diag.lastError = 'backup: ' + errText(e);
+          }
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+    }
+
     idxs.forEach((i, k) => {
-      const d = map ? map.get(uris[k]) : null;
-      if (d) {
-        const rec = makeRecord(d);
+      let rec = recs[k];
+      if (!rec && checked[k]) {
+        rec = makeRecord({}); // the file really has no tags
+        diag.metaNone++;
+      }
+      if (rec) {
         metaCache[out[i].id] = rec;
-        out[i] = applyRecord(out[i], rec);
-        diag.metaOk++;
+        out[i] = withEdit(applyRecord(out[i], rec));
       } else {
         diag.metaFail++;
       }
     });
     chunkNo++;
-    if (chunkNo % 5 === 0) {
+    if (chunkNo % 3 === 0) {
       persistMetaSoon();
       if (onUpdate) onUpdate(out.slice(), Math.min(p + CHUNK, todo.length), todo.length);
     }
@@ -346,6 +428,8 @@ export async function enrichSongs(list, isCancelled, onUpdate) {
 
 // ---------- Cover art ----------
 export function getCachedArt(song) {
+  const ec = getEditCover(song.id); // your own cover (or "no cover") wins
+  if (ec !== undefined) return ec;
   return artMap.has(song.id) ? artMap.get(song.id) : undefined;
 }
 
@@ -427,6 +511,11 @@ function pumpArt() {
 
 // Asks for a song's cover. Calls cb(uri or null) when ready. Returns a function that cancels.
 export function loadArt(song, cb) {
+  const ec = getEditCover(song.id);
+  if (ec !== undefined) {
+    cb(ec);
+    return () => {};
+  }
   if (artMap.has(song.id)) {
     cb(artMap.get(song.id));
     return () => {};
