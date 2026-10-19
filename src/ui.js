@@ -96,7 +96,7 @@ export function Art({ song, size, radius = 12 }) {
 }
 
 // ---------- List view row ----------
-export const SongRow = React.memo(function SongRow({ song, index, active, onPress, onLongPress }) {
+export const SongRow = React.memo(function SongRow({ song, index, active, onPress, onLongPress, fav, onFav }) {
   const { t, s } = useTheme();
   const sub = (song.artist || 'Unknown artist') + (song.album ? '  •  ' + song.album : '');
   return (
@@ -116,6 +116,15 @@ export const SongRow = React.memo(function SongRow({ song, index, active, onPres
         </Text>
       </View>
       <Text style={s.rowTime}>{formatTime(song.duration)}</Text>
+      {onFav ? (
+        <TouchableOpacity
+          onPress={() => onFav(song.id)}
+          hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
+          style={{ paddingHorizontal: 8 }}
+        >
+          <Ionicons name={fav ? 'heart' : 'heart-outline'} size={20} color={fav ? t.accent : t.muted} />
+        </TouchableOpacity>
+      ) : null}
       {active ? <Ionicons name="musical-notes" size={18} color={t.accent} style={s.rowNote} /> : null}
     </TouchableOpacity>
   );
@@ -145,12 +154,55 @@ export const SongTile = React.memo(function SongTile({ song, index, active, onPr
   );
 });
 
-// ---------- Album tile ----------
-export const GroupTile = React.memo(function GroupTile({ group, size, onPress }) {
-  const { s } = useTheme();
+// ---------- Album tile (long press to select, then you can hide several at once) ----------
+export const GroupTile = React.memo(function GroupTile({ group, size, onPress, onLongPress, selecting, selected }) {
+  const { t, s } = useTheme();
   return (
-    <TouchableOpacity activeOpacity={0.8} onPress={() => onPress(group)} style={{ width: size }}>
-      <Art song={group.songs[0]} size={size} radius={16} />
+    <TouchableOpacity
+      activeOpacity={0.8}
+      onPress={() => onPress(group)}
+      onLongPress={onLongPress ? () => onLongPress(group) : undefined}
+      style={{ width: size }}
+    >
+      <View>
+        <Art song={group.songs[0]} size={size} radius={16} />
+        {selected ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: size,
+              height: size,
+              borderRadius: 16,
+              borderWidth: 3,
+              borderColor: t.accent,
+              backgroundColor: t.accent + '33',
+            }}
+          />
+        ) : null}
+        {selecting ? (
+          <View
+            pointerEvents="none"
+            style={{
+              position: 'absolute',
+              top: 8,
+              right: 8,
+              width: 26,
+              height: 26,
+              borderRadius: 13,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: selected ? t.accent : 'rgba(0,0,0,0.45)',
+              borderWidth: 2,
+              borderColor: '#FFFFFF',
+            }}
+          >
+            {selected ? <Ionicons name="checkmark" size={16} color={t.onAccent} /> : null}
+          </View>
+        ) : null}
+      </View>
       <Text style={s.groupTitle} numberOfLines={1}>
         {group.title}
       </Text>
@@ -180,7 +232,7 @@ export const ArtistRow = React.memo(function ArtistRow({ group, onPress }) {
   );
 });
 
-// ---------- Tabs (Songs | Albums | Artists) ----------
+// ---------- Tabs (Songs | Albums | Artists | Favorites) ----------
 export function Segmented({ items, value, onChange }) {
   const { t, s } = useTheme();
   return (
@@ -272,7 +324,7 @@ export function MiniPlayer({ song, progress, playing, bottom, onOpen, onPrev, on
   );
 }
 
-// ---------- Options sheet: view, sort, theme, library info ----------
+// ---------- Options sheet: view, sort, theme, hidden albums, library info ----------
 function Chip({ label, active, onPress, icon }) {
   const { t, s } = useTheme();
   return (
@@ -287,7 +339,7 @@ function Chip({ label, active, onPress, icon }) {
   );
 }
 
-export function OptionsSheet({ visible, onClose, settings, onChange, info, onRescan }) {
+export function OptionsSheet({ visible, onClose, settings, onChange, info, onRescan, hiddenAlbums, onUnhide }) {
   const { t, s } = useTheme();
   const insets = useSafeAreaInsets();
 
@@ -364,6 +416,24 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
                 );
               })}
             </View>
+
+            {hiddenAlbums && hiddenAlbums.length > 0 ? (
+              <>
+                <Text style={s.sheetTitle}>Hidden albums</Text>
+                <View style={s.infoBox}>
+                  {hiddenAlbums.map((g) => (
+                    <View key={g.key} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 6 }}>
+                      <Text style={[s.infoLine, { flex: 1 }]} numberOfLines={1}>
+                        {g.title + (g.sub ? '  •  ' + g.sub : '')}
+                      </Text>
+                      <TouchableOpacity onPress={() => onUnhide(g.key)} style={{ paddingHorizontal: 12, paddingVertical: 6 }}>
+                        <Text style={{ color: t.accent, fontWeight: '800' }}>Show</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              </>
+            ) : null}
 
             <Text style={s.sheetTitle}>Library</Text>
             <View style={s.infoBox}>
