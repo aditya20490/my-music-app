@@ -27,7 +27,7 @@ export function Art({ song, size, radius = 12 }) {
     setUri(typeof c === 'string' ? c : null);
     if (c !== undefined) return undefined;
     return loadArt(song, (res) => setUri(res));
-  }, [song.id, song.uri]);
+  }, [song.id, song.uri, song.coverKey]);
 
   const onError = () => {
     if (retried.current) {
@@ -96,11 +96,16 @@ export function Art({ song, size, radius = 12 }) {
 }
 
 // ---------- List view row ----------
-export const SongRow = React.memo(function SongRow({ song, index, active, onPress }) {
+export const SongRow = React.memo(function SongRow({ song, index, active, onPress, onLongPress }) {
   const { t, s } = useTheme();
   const sub = (song.artist || 'Unknown artist') + (song.album ? '  •  ' + song.album : '');
   return (
-    <TouchableOpacity activeOpacity={0.7} style={s.row} onPress={() => onPress(index)}>
+    <TouchableOpacity
+      activeOpacity={0.7}
+      style={s.row}
+      onPress={() => onPress(index)}
+      onLongPress={onLongPress ? () => onLongPress(index) : undefined}
+    >
       <Art song={song} size={54} radius={12} />
       <View style={s.rowText}>
         <Text style={[s.rowTitle, active && { color: t.accent }]} numberOfLines={1}>
@@ -117,12 +122,13 @@ export const SongRow = React.memo(function SongRow({ song, index, active, onPres
 });
 
 // ---------- Grid view tile (big cover, name at the very bottom, one line) ----------
-export const SongTile = React.memo(function SongTile({ song, index, active, onPress, size }) {
+export const SongTile = React.memo(function SongTile({ song, index, active, onPress, onLongPress, size }) {
   const { t, s } = useTheme();
   return (
     <TouchableOpacity
       activeOpacity={0.8}
       onPress={() => onPress(index)}
+      onLongPress={onLongPress ? () => onLongPress(index) : undefined}
       style={[s.tile, { width: size, height: size }]}
     >
       <Art song={song} size={size} radius={0} />
@@ -295,6 +301,7 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
     'Details read OK: ' + info.metaOk + '   failed: ' + info.metaFail,
     'Covers saved: ' + info.artSaved + ' (backup reader: ' + info.artJs + ')   no cover: ' + info.artNone + '   failed: ' + info.artFail,
     'Backup cover reader: ' + (info.backupReader ? 'available' : 'NOT in this build'),
+    'Backup details reader: ' + (info.tagReader ? 'available' : 'NOT in this build') + '   used for: ' + info.metaJs + ' songs   untagged: ' + info.metaNone,
   ];
   if (info.lastError) lines.push('Last details error: ' + info.lastError);
   if (info.lastArtError) lines.push('Last cover error: ' + info.lastArtError);
