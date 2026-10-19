@@ -1,12 +1,23 @@
 // Small reusable pieces of the screen: cover pictures, song rows, tiles, buttons, options sheet.
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, Modal, ScrollView, Pressable, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  Image,
+  TouchableOpacity,
+  ScrollView,
+  Pressable,
+  StyleSheet,
+  Animated,
+  PanResponder,
+  useWindowDimensions,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, THEMES } from './theme';
 import { getCachedArt, loadArt, invalidateArt } from './library';
-import { gradientFor, formatTime, SORT_OPTIONS } from './utils';
+import { gradientFor, formatTime, SORT_MODES } from './utils';
 
 export const ROW_H = 72;
 
@@ -324,7 +335,8 @@ export function MiniPlayer({ song, progress, playing, bottom, onOpen, onPrev, on
   );
 }
 
-// ---------- Options sheet: view, sort, theme, hidden albums, library info ----------
+// ---------- Options sheet: sort, theme, hidden albums, library ----------
+// It is not a pop-up window. It slides up instantly, closes when you swipe it down or tap outside.
 function Chip({ label, active, onPress, icon }) {
   const { t, s } = useTheme();
   return (
@@ -339,13 +351,60 @@ function Chip({ label, active, onPress, icon }) {
   );
 }
 
-export function OptionsSheet({ visible, onClose, settings, onChange, info, onRescan, hiddenAlbums, onUnhide }) {
+export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRescan, hiddenAlbums, onUnhide }) {
   const { t, s } = useTheme();
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+
+  const slide = useRef(new Animated.Value(height)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+  const scrollY = useRef(0);
+  const closing = useRef(false);
+  const closeRef = useRef(null);
+  const [showInfo, setShowInfo] = useState(false);
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(slide, { toValue: 0, duration: 170, useNativeDriver: true }),
+      Animated.timing(fade, { toValue: 1, duration: 170, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
+  const close = () => {
+    if (closing.current) return;
+    closing.current = true;
+    Animated.parallel([
+      Animated.timing(slide, { toValue: height, duration: 150, useNativeDriver: true }),
+      Animated.timing(fade, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(() => onClose());
+  };
+  closeRef.current = close;
+
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (e, g) =>
+        scrollY.current <= 0 && g.dy > 10 && g.dy > Math.abs(g.dx) * 1.5,
+      onPanResponderMove: (e, g) => {
+        if (g.dy > 0) slide.setValue(g.dy);
+      },
+      onPanResponderRelease: (e, g) => {
+        if (g.dy > 90 || g.vy > 0.8) {
+          closeRef.current();
+        } else {
+          Animated.spring(slide, { toValue: 0, useNativeDriver: true }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(slide, { toValue: 0, useNativeDriver: true }).start();
+      },
+    })
+  ).current;
 
   const lines = [
     'Songs found: ' + info.songCount,
     'Songs with details (artist, album...): ' + info.withDetails,
+    'Saving favorites / albums: ' +
+      (info.storageOk ? 'working' : 'NOT working' + (info.storageError ? ' (' + info.storageError + ')' : '')),
     'Details library: ' +
       (info.metaLoaded
         ? 'loaded'
@@ -357,44 +416,30 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
   ];
   if (info.lastError) lines.push('Last details error: ' + info.lastError);
   if (info.lastArtError) lines.push('Last cover error: ' + info.lastArtError);
-  if (info.metaFunctions) lines.push('Library functions: ' + info.metaFunctions);
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-      statusBarTranslucent
-      navigationBarTranslucent
-    >
-      <View style={s.sheetWrap}>
-        <Pressable style={s.sheetBackdrop} onPress={onClose} />
-        <View style={[s.sheet, { paddingBottom: insets.bottom + 16 }]}>
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 50, elevation: 50 }}>
+      <Animated.View style={[s.sheetBackdrop, { opacity: fade }]}>
+        <Pressable style={{ flex: 1 }} onPress={close} />
+      </Animated.View>
+      <View style={s.sheetWrap} pointerEvents="box-none">
+        <Animated.View
+          style={[s.sheet, { paddingBottom: insets.bottom + 16, transform: [{ translateY: slide }] }]}
+          {...pan.panHandlers}
+        >
           <View style={s.sheetHandle} />
-          <ScrollView showsVerticalScrollIndicator={false}>
-            <Text style={s.sheetTitle}>View</Text>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            onScroll={(e) => {
+              scrollY.current = e.nativeEvent.contentOffset.y;
+            }}
+            scrollEventThrottle={16}
+          >
+            <Text style={s.sheetTitle}>Sort songs</Text>
             <View style={s.chipRow}>
-              <Chip label="List" icon="list" active={settings.view === 'list'} onPress={() => onChange({ view: 'list' })} />
-              <Chip label="Grid" icon="apps" active={settings.view === 'grid3'} onPress={() => onChange({ view: 'grid3' })} />
-            </View>
-
-            <Text style={s.sheetTitle}>Sort songs by</Text>
-            <View style={s.chipRow}>
-              {SORT_OPTIONS.map((o) => (
-                <Chip
-                  key={o.key}
-                  label={o.label}
-                  active={settings.sort === o.key}
-                  onPress={() => onChange({ sort: o.key, dir: o.key === 'added' && settings.sort !== 'added' ? 'desc' : settings.dir })}
-                />
+              {SORT_MODES.map((m) => (
+                <Chip key={m.key} label={m.label} active={sortMode === m.key} onPress={() => onChange({ sort: m.key })} />
               ))}
-            </View>
-
-            <Text style={s.sheetTitle}>Order</Text>
-            <View style={s.chipRow}>
-              <Chip label="Ascending" icon="arrow-up" active={settings.dir === 'asc'} onPress={() => onChange({ dir: 'asc' })} />
-              <Chip label="Descending" icon="arrow-down" active={settings.dir === 'desc'} onPress={() => onChange({ dir: 'desc' })} />
             </View>
 
             <Text style={s.sheetTitle}>Theme</Text>
@@ -404,12 +449,23 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
                 return (
                   <TouchableOpacity key={th.id} style={s.swatchItem} activeOpacity={0.8} onPress={() => onChange({ theme: th.id })}>
                     <LinearGradient
-                      colors={[th.accent, th.accent2]}
+                      colors={[th.bgTop, th.bg]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
-                      style={[s.swatch, { borderColor: on ? t.text : th.card }]}
+                      style={[s.swatch, { borderColor: on ? t.text : th.accent }]}
                     >
-                      {on ? <Ionicons name="checkmark" size={22} color="#fff" /> : null}
+                      <View
+                        style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: 11,
+                          backgroundColor: th.accent,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {on ? <Ionicons name="checkmark" size={15} color={th.onAccent} /> : null}
+                      </View>
                     </LinearGradient>
                     <Text style={[s.swatchName, on && { color: t.text }]}>{th.name}</Text>
                   </TouchableOpacity>
@@ -436,20 +492,30 @@ export function OptionsSheet({ visible, onClose, settings, onChange, info, onRes
             ) : null}
 
             <Text style={s.sheetTitle}>Library</Text>
-            <View style={s.infoBox}>
-              {lines.map((l, i) => (
-                <Text key={i} style={s.infoLine}>
-                  {l}
-                </Text>
-              ))}
+            <View style={s.chipRow}>
+              <Chip
+                label={showInfo ? 'Hide library info' : 'Show library info'}
+                icon="information-circle-outline"
+                active={false}
+                onPress={() => setShowInfo(!showInfo)}
+              />
             </View>
+            {showInfo ? (
+              <View style={[s.infoBox, { marginTop: 10 }]}>
+                {lines.map((l, i) => (
+                  <Text key={i} style={s.infoLine}>
+                    {l}
+                  </Text>
+                ))}
+              </View>
+            ) : null}
             <TouchableOpacity style={s.rescanButton} onPress={onRescan} activeOpacity={0.8}>
               <Ionicons name="refresh" size={18} color={t.onAccent} />
               <Text style={s.rescanText}>Rescan library</Text>
             </TouchableOpacity>
           </ScrollView>
-        </View>
+        </Animated.View>
       </View>
-    </Modal>
+    </View>
   );
 }
