@@ -31,6 +31,7 @@ import {
   ROW_H,
 } from './src/ui';
 import NowPlaying from './src/NowPlaying';
+import EditSong from './src/EditSong';
 
 const PAD = 16;
 const GAP = 12;
@@ -59,6 +60,7 @@ function MusicApp({ settings, updateSettings }) {
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editSong, setEditSong] = useState(null);
 
   const historyRef = useRef([]);
   const scanRef = useRef(0);
@@ -151,7 +153,7 @@ function MusicApp({ settings, updateSettings }) {
         setSongs(out);
         setScan(null);
         const missing = out.filter((x) => !x.hasMeta).length;
-        if (missing > 0 && Lib.getDiagnostics().metaOk === 0) {
+        if (missing > 0 && Lib.getDiagnostics().metaOk + Lib.getDiagnostics().metaJs === 0) {
           setErrorText('Artist, album and cover info could not be read. Open Options > Library to see why.');
         }
       }
@@ -253,6 +255,25 @@ function MusicApp({ settings, updateSettings }) {
     [openedGroup, playAt]
   );
 
+  // Long press a song to edit it
+  const onSongLong = useCallback(
+    (index) => {
+      if (filtered[index]) setEditSong(filtered[index]);
+    },
+    [filtered]
+  );
+
+  const onGroupSongLong = useCallback(
+    (index) => {
+      if (openedGroup && openedGroup.songs[index]) setEditSong(openedGroup.songs[index]);
+    },
+    [openedGroup]
+  );
+
+  const onEditChange = useCallback((newSong) => {
+    setSongs((prev) => prev.map((x) => (x.id === newSong.id ? newSong : x)));
+  }, []);
+
   function playList(list, shuffleMode) {
     if (list.length === 0) return;
     historyRef.current = [];
@@ -348,18 +369,37 @@ function MusicApp({ settings, updateSettings }) {
   const renderSong = useCallback(
     ({ item, index }) =>
       gridMode ? (
-        <SongTile song={item} index={index} active={item.id === currentId} onPress={onSongPress} size={tileSize} />
+        <SongTile
+          song={item}
+          index={index}
+          active={item.id === currentId}
+          onPress={onSongPress}
+          onLongPress={onSongLong}
+          size={tileSize}
+        />
       ) : (
-        <SongRow song={item} index={index} active={item.id === currentId} onPress={onSongPress} />
+        <SongRow
+          song={item}
+          index={index}
+          active={item.id === currentId}
+          onPress={onSongPress}
+          onLongPress={onSongLong}
+        />
       ),
-    [currentId, onSongPress, gridMode, tileSize]
+    [currentId, onSongPress, onSongLong, gridMode, tileSize]
   );
 
   const renderGroupSong = useCallback(
     ({ item, index }) => (
-      <SongRow song={item} index={index} active={item.id === currentId} onPress={onGroupSongPress} />
+      <SongRow
+        song={item}
+        index={index}
+        active={item.id === currentId}
+        onPress={onGroupSongPress}
+        onLongPress={onGroupSongLong}
+      />
     ),
-    [currentId, onGroupSongPress]
+    [currentId, onGroupSongPress, onGroupSongLong]
   );
 
   const openAlbum = useCallback((g) => setOpenGroup({ type: 'album', key: g.key }), []);
@@ -654,6 +694,14 @@ function MusicApp({ settings, updateSettings }) {
         onNext={() => goNext(false)}
         onTogglePlay={togglePlay}
         onSeek={(sec) => player.seekTo(sec)}
+        onEdit={(sg) => setEditSong(sg)}
+      />
+
+      <EditSong
+        visible={!!editSong}
+        song={editSong}
+        onClose={() => setEditSong(null)}
+        onChange={onEditChange}
       />
 
       <OptionsSheet
