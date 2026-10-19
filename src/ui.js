@@ -472,6 +472,11 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
                 );
               })}
             </View>
+            <Text style={s.sheetTitle}>Dynamic island</Text>
+            <View style={s.chipRow}>
+              <Chip label="On" icon="radio-button-on" active={settings.island !== false} onPress={() => onChange({ island: true })} />
+              <Chip label="Off" icon="radio-button-off" active={settings.island === false} onPress={() => onChange({ island: false })} />
+            </View>
 
             {hiddenAlbums && hiddenAlbums.length > 0 ? (
               <>
