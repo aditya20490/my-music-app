@@ -3,15 +3,15 @@ import { createContext, useContext } from 'react';
 import { StyleSheet } from 'react-native';
 
 export const THEMES = [
-  { id: 'dark', name: 'Dark', isDark: true, bg: '#0B0B10', card: '#16161D', text: '#FFFFFF', muted: '#9A9AA8', accent: '#A78BFA', accent2: '#EC4899', track: '#33333F', onAccent: '#0B0B10' },
-  { id: 'amoled', name: 'Black', isDark: true, bg: '#000000', card: '#111114', text: '#FFFFFF', muted: '#8E8E99', accent: '#22D3EE', accent2: '#6366F1', track: '#2A2A30', onAccent: '#000000' },
-  { id: 'red', name: 'Red', isDark: true, bg: '#120708', card: '#201012', text: '#FFFFFF', muted: '#A99A9B', accent: '#EF4444', accent2: '#F97316', track: '#3A2023', onAccent: '#FFFFFF' },
-  { id: 'pink', name: 'Pink', isDark: true, bg: '#140810', card: '#22101B', text: '#FFFFFF', muted: '#AC99A5', accent: '#F472B6', accent2: '#C084FC', track: '#3B2032', onAccent: '#1A0612' },
-  { id: 'blue', name: 'Blue', isDark: true, bg: '#070B14', card: '#0E1626', text: '#FFFFFF', muted: '#97A0B3', accent: '#3B82F6', accent2: '#06B6D4', track: '#1F2D47', onAccent: '#FFFFFF' },
-  { id: 'green', name: 'Green', isDark: true, bg: '#07110B', card: '#0E1D14', text: '#FFFFFF', muted: '#97AB9F', accent: '#22C55E', accent2: '#14B8A6', track: '#1E3626', onAccent: '#04130A' },
-  { id: 'orange', name: 'Orange', isDark: true, bg: '#130C05', card: '#21150A', text: '#FFFFFF', muted: '#AB9F93', accent: '#F97316', accent2: '#F59E0B', track: '#3A2814', onAccent: '#1A0B02' },
-  { id: 'purple', name: 'Purple', isDark: true, bg: '#0D0814', card: '#170F22', text: '#FFFFFF', muted: '#A096B0', accent: '#A855F7', accent2: '#6366F1', track: '#2D1F44', onAccent: '#FFFFFF' },
-  { id: 'light', name: 'Light', isDark: false, bg: '#F6F6FA', card: '#FFFFFF', text: '#111118', muted: '#6B6B7B', accent: '#7C3AED', accent2: '#EC4899', track: '#DADAE4', onAccent: '#FFFFFF' },
+  { id: 'dark', name: 'Dark', isDark: true, bg: '#0B0B10', bgTop: '#2B1F55', card: '#1A1A24', text: '#FFFFFF', muted: '#9A9AA8', accent: '#A78BFA', accent2: '#EC4899', track: '#33333F', onAccent: '#0B0B10' },
+  { id: 'amoled', name: 'Black', isDark: true, bg: '#000000', bgTop: '#062A33', card: '#111114', text: '#FFFFFF', muted: '#8E8E99', accent: '#22D3EE', accent2: '#6366F1', track: '#2A2A30', onAccent: '#000000' },
+  { id: 'red', name: 'Red', isDark: true, bg: '#1C0508', bgTop: '#6B0F1E', card: '#3A111A', text: '#FFFFFF', muted: '#C49A9F', accent: '#FF4D5E', accent2: '#FF8A3D', track: '#5C2230', onAccent: '#FFFFFF' },
+  { id: 'pink', name: 'Pink', isDark: true, bg: '#220718', bgTop: '#7A1850', card: '#471331', text: '#FFFFFF', muted: '#C99BB8', accent: '#FF6FB5', accent2: '#C084FC', track: '#64214A', onAccent: '#2A0618' },
+  { id: 'blue', name: 'Blue', isDark: true, bg: '#050F26', bgTop: '#123C86', card: '#0F2859', text: '#FFFFFF', muted: '#9FB0D0', accent: '#4DA3FF', accent2: '#22D3EE', track: '#25427A', onAccent: '#04122B' },
+  { id: 'green', name: 'Green', isDark: true, bg: '#04180C', bgTop: '#0F6638', card: '#0D3F24', text: '#FFFFFF', muted: '#9CBBA9', accent: '#34D67A', accent2: '#14B8A6', track: '#1F5A39', onAccent: '#03150A' },
+  { id: 'orange', name: 'Orange', isDark: true, bg: '#1E0F03', bgTop: '#7A3D08', card: '#47260B', text: '#FFFFFF', muted: '#C9AE95', accent: '#FF9A3D', accent2: '#FACC15', track: '#6B4220', onAccent: '#1E0F03' },
+  { id: 'purple', name: 'Purple', isDark: true, bg: '#10052B', bgTop: '#4A1C9A', card: '#2B1259', text: '#FFFFFF', muted: '#B2A3D0', accent: '#B27CFF', accent2: '#6C7BFF', track: '#463078', onAccent: '#10052B' },
+  { id: 'light', name: 'Light', isDark: false, bg: '#F6F6FA', bgTop: '#E2D6FF', card: '#FFFFFF', text: '#111118', muted: '#6B6B7B', accent: '#7C3AED', accent2: '#EC4899', track: '#DADAE4', onAccent: '#FFFFFF' },
 ];
 
 export function getTheme(id) {
