@@ -1,6 +1,6 @@
 // Small reusable pieces of the screen: cover pictures, song rows, tiles, buttons, options sheet.
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, Modal, ScrollView, Pressable } from 'react-native';
+import { View, Text, Image, TouchableOpacity, Modal, ScrollView, Pressable, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,9 +18,11 @@ export function Art({ song, size, radius = 12 }) {
     return typeof c === 'string' ? c : null;
   });
   const retried = useRef(false);
+  const [needsBack, setNeedsBack] = useState(false); // true when the cover is not square
 
   useEffect(() => {
     retried.current = false;
+    setNeedsBack(false);
     const c = getCachedArt(song);
     setUri(typeof c === 'string' ? c : null);
     if (c !== undefined) return undefined;
@@ -39,14 +41,35 @@ export function Art({ song, size, radius = 12 }) {
   };
 
   if (uri) {
+    // The whole cover is shown (nothing is cut off). If it is not square, a blurred copy fills the empty space.
     return (
-      <Image
-        source={{ uri }}
-        style={{ width: size, height: size, borderRadius: radius, backgroundColor: t.card }}
-        resizeMode="cover"
-        resizeMethod="resize"
-        onError={onError}
-      />
+      <View style={{ width: size, height: size, borderRadius: radius, overflow: 'hidden', backgroundColor: t.card }}>
+        {needsBack ? (
+          <>
+            <Image
+              source={{ uri }}
+              style={StyleSheet.absoluteFill}
+              resizeMode="cover"
+              resizeMethod="resize"
+              blurRadius={25}
+            />
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.3)' }]} />
+          </>
+        ) : null}
+        <Image
+          source={{ uri }}
+          style={{ width: size, height: size }}
+          resizeMode="contain"
+          resizeMethod="resize"
+          onLoad={(e) => {
+            const src = e && e.nativeEvent ? e.nativeEvent.source : null;
+            if (src && src.width > 0 && src.height > 0) {
+              setNeedsBack(Math.abs(src.width / src.height - 1) > 0.03);
+            }
+          }}
+          onError={onError}
+        />
+      </View>
     );
   }
 
