@@ -34,13 +34,13 @@ export function makeStyles(t) {
     emptyWrap: { alignItems: 'center', paddingHorizontal: 32, marginTop: 40 },
 
     // header
-    headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 12 },
-    bigTitle: { color: t.text, fontSize: 32, fontWeight: '800' },
-    headerSub: { color: t.muted, fontSize: 14, marginTop: 2 },
+    headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, marginBottom: 8 },
+    bigTitle: { color: t.text, fontSize: 24, fontWeight: '800' },
+    headerSub: { color: t.muted, fontSize: 12, marginTop: 0 },
     headerBtn: {
-      width: 42,
-      height: 42,
-      borderRadius: 21,
+      width: 38,
+      height: 38,
+      borderRadius: 19,
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: t.card,
@@ -54,17 +54,17 @@ export function makeStyles(t) {
       backgroundColor: t.card,
       marginHorizontal: 16,
       paddingHorizontal: 14,
-      borderRadius: 16,
-      height: 48,
+      borderRadius: 14,
+      height: 40,
     },
-    searchInput: { flex: 1, color: t.text, fontSize: 16, marginLeft: 10 },
+    searchInput: { flex: 1, color: t.text, fontSize: 15, marginLeft: 8, paddingVertical: 0 },
     segment: {
       flexDirection: 'row',
       marginHorizontal: 16,
-      marginTop: 12,
+      marginTop: 8,
       backgroundColor: t.card,
       borderRadius: 14,
-      padding: 4,
+      padding: 3,
     },
     segItem: {
       flex: 1,
@@ -72,24 +72,24 @@ export function makeStyles(t) {
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
-      paddingVertical: 9,
+      paddingVertical: 7,
       borderRadius: 11,
     },
     segText: { color: t.muted, fontSize: 13, fontWeight: '700' },
 
     // buttons
-    actionRow: { flexDirection: 'row', paddingHorizontal: 16, marginTop: 12, marginBottom: 8, gap: 12 },
+    actionRow: { flexDirection: 'row', paddingHorizontal: 16, marginTop: 8, marginBottom: 6, gap: 10 },
     actionButton: {
-      height: 48,
-      borderRadius: 24,
+      height: 40,
+      borderRadius: 20,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 8,
     },
     actionButtonDark: { backgroundColor: t.card },
-    actionText: { color: t.text, fontSize: 16, fontWeight: '700' },
-    actionTextWhite: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
+    actionText: { color: t.text, fontSize: 14, fontWeight: '700' },
+    actionTextWhite: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
     primaryButton: {
       marginTop: 28,
       backgroundColor: t.accent,
@@ -109,8 +109,8 @@ export function makeStyles(t) {
     rowTime: { color: t.muted, fontSize: 12 },
     rowNote: { marginLeft: 8 },
 
-    // grid tiles (square, no rounded corners, title at the very bottom)
-    tile: { overflow: 'hidden', backgroundColor: t.card },
+    // grid tiles (square with round corners, title at the very bottom)
+    tile: { overflow: 'hidden', backgroundColor: t.card, borderRadius: 12 },
     tileScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 6, paddingBottom: 5, paddingTop: 22 },
     tileTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
     tileArtist: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 1 },
@@ -124,7 +124,7 @@ export function makeStyles(t) {
       borderRadius: 8,
     },
     badgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '600' },
-    tileActive: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderWidth: 3 },
+    tileActive: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderWidth: 3, borderRadius: 12 },
 
     // albums / artists
     groupTitle: { color: t.text, fontSize: 14, fontWeight: '700', marginTop: 8 },
