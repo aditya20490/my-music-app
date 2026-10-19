@@ -37,6 +37,7 @@ import NowPlaying from './src/NowPlaying';
 import EditSong from './src/EditSong';
 import FastScroll from './src/FastScroll';
 import AlbumEditor from './src/AlbumEditor';
+import DynamicIsland from './src/DynamicIsland';
 
 const PAD = 16;
 const GAP = 12;
@@ -1023,6 +1024,24 @@ function MusicApp({ settings, updateSettings }) {
           onPrev={() => goPrev(false)}
           onToggle={togglePlay}
           onNext={() => goNext(false)}
+        />
+      ) : null}
+
+      {/* Dynamic island at the top of the screen (can be switched off in Options) */}
+      {current && settings.island !== false ? (
+        <DynamicIsland
+          song={current}
+          playing={status.playing}
+          progress={progress}
+          currentTime={status.currentTime}
+          duration={duration}
+          hidden={playerOpen || selecting}
+          onOpen={() => setPlayerOpen(true)}
+          onPrev={() => goPrev(false)}
+          onSwipePrev={() => goPrev(true)}
+          onToggle={togglePlay}
+          onNext={() => goNext(false)}
+          onSeek={(sec) => player.seekTo(sec)}
         />
       ) : null}
 
