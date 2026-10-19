@@ -32,14 +32,14 @@ export function formatTime(seconds) {
   return m + ':' + (s < 10 ? '0' : '') + s;
 }
 
-export const SORT_OPTIONS = [
-  { key: 'title', label: 'Title' },
-  { key: 'artist', label: 'Artist' },
-  { key: 'album', label: 'Album' },
-  { key: 'year', label: 'Year' },
-  { key: 'genre', label: 'Genre' },
-  { key: 'duration', label: 'Length' },
-  { key: 'added', label: 'Date added' },
+// The only sorting choices in the app
+export const SORT_MODES = [
+  { key: 'newest', label: 'Newest first' },
+  { key: 'oldest', label: 'Oldest first' },
+  { key: 'largest', label: 'Largest first' },
+  { key: 'smallest', label: 'Smallest first' },
+  { key: 'az', label: 'Name A to Z' },
+  { key: 'za', label: 'Name Z to A' },
 ];
 
 function low(v) {
@@ -47,7 +47,7 @@ function low(v) {
 }
 
 // Returns the value to sort by, or null when the song has no value (those go last).
-function sortKey(item, key) {
+function sortKey(item, key, sizes) {
   const s = item.s;
   switch (key) {
     case 'artist':
@@ -62,12 +62,16 @@ function sortKey(item, key) {
       return s.duration > 0 ? s.duration : null;
     case 'added':
       return s.added > 0 ? s.added : null;
+    case 'size': {
+      const v = sizes ? sizes[s.id] : 0;
+      return v > 0 ? v : null;
+    }
     default:
       return item.t || null;
   }
 }
 
-export function sortSongs(songs, key, dir) {
+export function sortSongs(songs, key, dir, sizes) {
   const mul = dir === 'desc' ? -1 : 1;
   const arr = songs.map((s) => ({
     s,
@@ -77,8 +81,8 @@ export function sortSongs(songs, key, dir) {
     g: low(s.genre),
   }));
   arr.sort((x, y) => {
-    const kx = sortKey(x, key);
-    const ky = sortKey(y, key);
+    const kx = sortKey(x, key, sizes);
+    const ky = sortKey(y, key, sizes);
     if (kx === null && ky !== null) return 1;
     if (kx !== null && ky === null) return -1;
     if (kx !== null && ky !== null && kx !== ky) {
@@ -98,6 +102,24 @@ export function sortSongs(songs, key, dir) {
     return x.t.localeCompare(y.t);
   });
   return arr.map((i) => i.s);
+}
+
+// Sorts the way the options sheet says: newest, oldest, largest, smallest, A to Z, Z to A
+export function sortByMode(songs, mode, sizes) {
+  switch (mode) {
+    case 'newest':
+      return sortSongs(songs, 'added', 'desc');
+    case 'oldest':
+      return sortSongs(songs, 'added', 'asc');
+    case 'largest':
+      return sortSongs(songs, 'size', 'desc', sizes);
+    case 'smallest':
+      return sortSongs(songs, 'size', 'asc', sizes);
+    case 'za':
+      return sortSongs(songs, 'title', 'desc');
+    default:
+      return sortSongs(songs, 'title', 'asc');
+  }
 }
 
 // Groups songs into albums or artists. mode: 'album' | 'artist'
@@ -135,31 +157,61 @@ export function groupSongs(songs, mode) {
   return groups;
 }
 
+// ---------- Lyrics ----------
 // Lyrics can be plain text or "synced" (LRC) with [mm:ss.xx] time tags.
+// Some files even have word by word times like <mm:ss.xx> inside a line.
+
+function toSeconds(mm, ss, frac) {
+  const m = parseInt(mm, 10);
+  const s = parseInt(ss, 10);
+  const f = frac ? parseFloat('0.' + frac) : 0;
+  return m * 60 + s + f;
+}
+
+// Splits a line with <mm:ss.xx> tags into words with their start time. Returns null if there are no word tags.
+function parseWords(content, lineTime) {
+  const re = /<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>/g;
+  if (!re.test(content)) return null;
+  const re2 = /<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>/g;
+  const words = [];
+  let m;
+  let lastIdx = 0;
+  let curT = lineTime;
+  while ((m = re2.exec(content)) !== null) {
+    const seg = content.slice(lastIdx, m.index);
+    if (seg !== '') words.push({ t: curT, text: seg });
+    curT = toSeconds(m[1], m[2], m[3]);
+    lastIdx = re2.lastIndex;
+  }
+  const tail = content.slice(lastIdx);
+  if (tail !== '') words.push({ t: curT, text: tail });
+  return words.length > 0 ? words : null;
+}
+
 export function parseLyrics(raw) {
   if (!raw) return { synced: false, lines: [] };
   const rawLines = String(raw).replace(/\r/g, '').split('\n');
   const synced = [];
   const plain = [];
   let hasTime = false;
+  const wordTag = /<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>/g;
   for (const line of rawLines) {
     const times = [];
     const re = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
     let m;
     while ((m = re.exec(line)) !== null) {
-      const mm = parseInt(m[1], 10);
-      const ss = parseInt(m[2], 10);
-      const frac = m[3] ? parseFloat('0.' + m[3]) : 0;
-      times.push(mm * 60 + ss + frac);
+      times.push(toSeconds(m[1], m[2], m[3]));
     }
-    const content = line.replace(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g, '').trim();
+    const content = line.replace(/\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g, '');
+    const text = content.replace(wordTag, '').replace(/\s+/g, ' ').trim();
     if (times.length > 0) {
       hasTime = true;
-      for (const t of times) synced.push({ t, text: content });
+      const words = times.length === 1 ? parseWords(content.replace(/^\s+/, ''), times[0]) : null;
+      for (const t of times) synced.push({ t, text, words });
     } else if (/^\[(ar|ti|al|by|offset|length|au|re|ve|la):/i.test(line.trim())) {
       // LRC info tag line, skip it
     } else {
-      plain.push({ t: null, text: line.trim() });
+      plain.push({ t: null, text: line.replace(wordTag, '').trim(), words: null });
     }
   }
   if (hasTime) {
