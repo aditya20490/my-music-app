@@ -1,6 +1,7 @@
 // Everything that talks to the phone: finding songs, reading song info, cover art, lyrics, saved settings.
 import { Platform, PermissionsAndroid } from 'react-native';
 import { cleanTitle } from './utils';
+import { extractEmbeddedArt, EMBEDDED_ART_AVAILABLE } from './embeddedArt';
 
 // The newest Expo keeps the song-scanning functions in "expo-media-library/legacy".
 let MediaLibrary = null;
@@ -49,6 +50,8 @@ const diag = {
   artSaved: 0,
   artNone: 0,
   artFail: 0,
+  artJs: 0,
+  backupReader: EMBEDDED_ART_AVAILABLE,
   lastArtError: '',
 };
 
@@ -94,7 +97,7 @@ async function removeKey(key) {
 
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
-  view: 'list', // list | grid2 | grid3
+  view: 'list', // list | grid3
   sort: 'title',
   dir: 'asc',
   shuffle: false,
@@ -103,7 +106,9 @@ export const DEFAULT_SETTINGS = {
 
 export async function loadSettings() {
   const saved = await getJSON('mm_settings_v1', {});
-  return { ...DEFAULT_SETTINGS, ...saved };
+  const merged = { ...DEFAULT_SETTINGS, ...saved };
+  if (merged.view !== 'list') merged.view = 'grid3'; // the old 2-grid option is gone
+  return merged;
 }
 
 export function saveSettings(settings) {
@@ -133,10 +138,13 @@ let metaCache = {};
 const artMap = new Map(); // song id -> saved cover file uri, or null when the song has no cover
 let metaSaveTimer = null;
 let artSaveTimer = null;
+const artSoft = new Set(); // ids whose cover failed with an error (not saved as "no cover")
+const skipLib = new Set(); // ids where the library's cover file was broken, use backup reader
 
 export async function loadCaches() {
   metaCache = await getJSON('mm_meta_v2', {});
-  const art = await getJSON('mm_art_v1', {});
+  await removeKey('mm_art_v1'); // old cache could hold "no cover" from builds that failed
+  const art = await getJSON('mm_art_v2', {});
   for (const id of Object.keys(art)) {
     artMap.set(id, art[id] === 0 ? null : art[id]);
   }
@@ -156,9 +164,10 @@ function persistArtSoon() {
     artSaveTimer = null;
     const obj = {};
     artMap.forEach((v, k) => {
+      if (artSoft.has(k)) return;
       obj[k] = v === null ? 0 : v;
     });
-    setJSON('mm_art_v1', obj);
+    setJSON('mm_art_v2', obj);
   }, 2500);
 }
 
@@ -167,6 +176,7 @@ export async function clearCaches() {
   artMap.clear();
   await removeKey('mm_meta_v2');
   await removeKey('mm_art_v1');
+  await removeKey('mm_art_v2');
 }
 
 function str(v) {
@@ -341,6 +351,8 @@ export function getCachedArt(song) {
 
 export function invalidateArt(id) {
   artMap.delete(id);
+  artSoft.delete(id);
+  skipLib.add(id);
 }
 
 const artListeners = new Map(); // id -> Set of callbacks
@@ -356,20 +368,38 @@ function fileUri(u) {
 async function runArtJob(id) {
   const song = artJobs.get(id);
   let result = null;
+  let hadError = false;
   if (song) {
-    try {
-      const opts = { compress: 0.8 };
-      if (Meta.SaveFormat && Meta.SaveFormat.JPEG) opts.format = Meta.SaveFormat.JPEG;
-      const saved = await Meta.saveArtwork(song.uri, opts);
-      result = fileUri(saved);
-      if (result) diag.artSaved++;
-      else diag.artNone++;
-    } catch (e) {
-      result = null;
-      diag.artFail++;
-      diag.lastArtError = errText(e);
+    // 1) the song details library
+    if (Meta && typeof Meta.saveArtwork === 'function' && !skipLib.has(id)) {
+      try {
+        const opts = { compress: 0.85 };
+        if (Meta.SaveFormat && Meta.SaveFormat.JPEG) opts.format = Meta.SaveFormat.JPEG;
+        const saved = await Meta.saveArtwork(song.uri, opts);
+        result = fileUri(saved);
+      } catch (e) {
+        hadError = true;
+        diag.lastArtError = errText(e);
+      }
     }
+    // 2) backup: read the picture straight from the file
+    if (!result && EMBEDDED_ART_AVAILABLE) {
+      try {
+        const r = await extractEmbeddedArt(song);
+        if (r) {
+          result = r;
+          diag.artJs++;
+        }
+      } catch (e) {
+        hadError = true;
+        diag.lastArtError = 'backup: ' + errText(e);
+      }
+    }
+    if (result) diag.artSaved++;
+    else if (hadError) diag.artFail++;
+    else diag.artNone++;
   }
+  if (!result && hadError) artSoft.add(id);
   artMap.set(id, result);
   persistArtSoon();
   const set = artListeners.get(id);
@@ -401,7 +431,7 @@ export function loadArt(song, cb) {
     cb(artMap.get(song.id));
     return () => {};
   }
-  if (!Meta || typeof Meta.saveArtwork !== 'function') {
+  if ((!Meta || typeof Meta.saveArtwork !== 'function') && !EMBEDDED_ART_AVAILABLE) {
     cb(null);
     return () => {};
   }
