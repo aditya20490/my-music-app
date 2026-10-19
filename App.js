@@ -8,6 +8,7 @@ import {
   StatusBar,
   ActivityIndicator,
   Linking,
+  Alert,
   useWindowDimensions,
   BackHandler,
 } from 'react-native';
@@ -19,7 +20,8 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 import { ThemeContext, getTheme, makeStyles, useTheme } from './src/theme';
 import * as Lib from './src/library';
 import * as Collections from './src/collections';
-import { sortSongs, groupSongs } from './src/utils';
+import * as Sizes from './src/sizes';
+import { sortByMode, groupSongs, SORT_MODES } from './src/utils';
 import {
   Art,
   SongRow,
@@ -34,6 +36,7 @@ import {
 import NowPlaying from './src/NowPlaying';
 import EditSong from './src/EditSong';
 import FastScroll from './src/FastScroll';
+import AlbumEditor from './src/AlbumEditor';
 
 const PAD = 16;
 const GAP = 12;
@@ -73,6 +76,7 @@ function MusicApp({ settings, updateSettings }) {
   const [permission, setPermission] = useState('checking'); // checking | granted | denied
   const [loading, setLoading] = useState(false);
   const [songs, setSongs] = useState([]);
+  const [sizes, setSizes] = useState({}); // song id -> file size
   const [scan, setScan] = useState(null); // { done, total } while reading song details
   const [errorText, setErrorText] = useState('');
   const [query, setQuery] = useState('');
@@ -84,7 +88,9 @@ function MusicApp({ settings, updateSettings }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editSong, setEditSong] = useState(null);
   const [favs, setFavs] = useState(() => new Set()); // favorite song ids (saved inside the app only)
-  const [hidden, setHidden] = useState(() => new Set()); // hidden album keys (saved inside the app only)
+  const [hidden, setHidden] = useState({}); // hidden albums: { key: { title, sub } } (saved inside the app only)
+  const [customAlbums, setCustomAlbums] = useState([]); // your own albums: [{ id, name, songIds }]
+  const [albumEditor, setAlbumEditor] = useState(null); // null, or { id, name, songIds }
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState({});
 
@@ -93,6 +99,7 @@ function MusicApp({ settings, updateSettings }) {
   const playingIdRef = useRef(null);
   const listRef = useRef(null);
   const fastRef = useRef(null);
+  const volumeRef = useRef(1);
 
   const player = useAudioPlayer(null);
   const status = useAudioPlayerStatus(player);
@@ -120,15 +127,23 @@ function MusicApp({ settings, updateSettings }) {
         const c = await Collections.loadCollections();
         setFavs(c.favs);
         setHidden(c.hidden);
+        setCustomAlbums(c.customAlbums);
+      } catch (e) {}
+      try {
+        setSizes(await Sizes.loadSizes());
       } catch (e) {}
       await Lib.loadCaches();
       await ensurePermission();
     })();
   }, []);
 
-  // Android back button: cancels selecting, or closes the album / artist page
+  // Android back button: closes the options, cancels selecting, or closes the album / artist page
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (sheetOpen) {
+        setSheetOpen(false);
+        return true;
+      }
       if (selecting) {
         setSelecting(false);
         setSelected({});
@@ -141,7 +156,7 @@ function MusicApp({ settings, updateSettings }) {
       return false;
     });
     return () => sub.remove();
-  }, [openGroup, selecting]);
+  }, [openGroup, selecting, sheetOpen]);
 
   // Leaving the Albums tab cancels selecting
   useEffect(() => {
@@ -205,9 +220,11 @@ function MusicApp({ settings, updateSettings }) {
         setScan(null);
         const missing = out.filter((x) => !x.hasMeta).length;
         if (missing > 0 && Lib.getDiagnostics().metaOk + Lib.getDiagnostics().metaJs === 0) {
-          setErrorText('Artist, album and cover info could not be read. Open Options > Library to see why.');
+          setErrorText('Artist, album and cover info could not be read. Open Options > Library info to see why.');
         }
       }
+      // File sizes (for "Largest first / Smallest first"), read quietly in the background
+      Sizes.fillSizes(list, () => scanRef.current !== myScan, (m) => setSizes(m));
     }
   }
 
@@ -229,21 +246,45 @@ function MusicApp({ settings, updateSettings }) {
     });
   }, []);
 
-  // ---------- Hidden albums ----------
-  const allAlbums = useMemo(() => (hidden.size > 0 ? groupSongs(songs, 'album') : []), [songs, hidden]);
-  const hiddenAlbumList = useMemo(() => allAlbums.filter((g) => hidden.has(g.key)), [allAlbums, hidden]);
+  // ---------- Albums (real ones from the files + the ones you made) ----------
+  const realAlbums = useMemo(() => groupSongs(songs, 'album'), [songs]);
 
-  // Songs that are not inside a hidden album
-  const shownSongs = useMemo(() => {
-    if (hiddenAlbumList.length === 0) return songs;
-    const ids = new Set();
-    hiddenAlbumList.forEach((g) => g.songs.forEach((x) => ids.add(x.id)));
-    return songs.filter((x) => !ids.has(x.id));
-  }, [songs, hiddenAlbumList]);
+  const customGroups = useMemo(
+    () =>
+      customAlbums
+        .map((a) => ({
+          key: 'c:' + a.id,
+          title: a.name,
+          sub: 'My album',
+          custom: true,
+          id: a.id,
+          unknown: false,
+          songs: a.songIds.map((id) => songsById[id]).filter(Boolean),
+        }))
+        .filter((g) => g.songs.length > 0),
+    [customAlbums, songsById]
+  );
+
+  const allGroups = useMemo(() => [...customGroups, ...realAlbums], [customGroups, realAlbums]);
+
+  // Hidden albums only disappear from the Albums tab. Songs are never hidden.
+  const albums = useMemo(() => allGroups.filter((g) => !hidden[g.key]), [allGroups, hidden]);
+
+  const hiddenList = useMemo(
+    () => Object.keys(hidden).map((k) => ({ key: k, title: hidden[k].title, sub: hidden[k].sub })),
+    [hidden]
+  );
 
   function hideSelected() {
-    const next = new Set(hidden);
-    Object.keys(selected).forEach((k) => next.add(k));
+    const byKey = {};
+    allGroups.forEach((g) => {
+      byKey[g.key] = g;
+    });
+    const next = { ...hidden };
+    Object.keys(selected).forEach((k) => {
+      const g = byKey[k];
+      next[k] = { title: g ? g.title : k, sub: g ? g.sub : '' };
+    });
     setHidden(next);
     Collections.saveHidden(next);
     setSelecting(false);
@@ -251,8 +292,8 @@ function MusicApp({ settings, updateSettings }) {
   }
 
   function unhideAlbum(key) {
-    const next = new Set(hidden);
-    next.delete(key);
+    const next = { ...hidden };
+    delete next[key];
     setHidden(next);
     Collections.saveHidden(next);
   }
@@ -262,11 +303,39 @@ function MusicApp({ settings, updateSettings }) {
     setSelected({});
   }
 
+  function saveAlbum(a) {
+    let next;
+    if (a.id) {
+      next = customAlbums.map((x) => (x.id === a.id ? { ...x, name: a.name, songIds: a.songIds } : x));
+    } else {
+      next = [...customAlbums, { id: 'a' + Date.now(), name: a.name, songIds: a.songIds }];
+    }
+    setCustomAlbums(next);
+    Collections.saveCustomAlbums(next);
+    setAlbumEditor(null);
+  }
+
+  function deleteCustomAlbum(id) {
+    Alert.alert('Delete this album?', 'Only the album is removed. The songs stay on your phone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          const next = customAlbums.filter((a) => a.id !== id);
+          setCustomAlbums(next);
+          Collections.saveCustomAlbums(next);
+          setOpenGroup(null);
+        },
+      },
+    ]);
+  }
+
   // ---------- Lists ----------
-  const sorted = useMemo(
-    () => sortSongs(shownSongs, settings.sort, settings.dir),
-    [shownSongs, settings.sort, settings.dir]
-  );
+  const sortMode = SORT_MODES.some((m) => m.key === settings.sort) ? settings.sort : 'az';
+  const sizeDep = sortMode === 'largest' || sortMode === 'smallest' ? sizes : null;
+
+  const sorted = useMemo(() => sortByMode(songs, sortMode, sizes), [songs, sortMode, sizeDep]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -285,10 +354,8 @@ function MusicApp({ settings, updateSettings }) {
   // The songs shown on the current tab (Songs or Favorites)
   const songList = tab === 'favs' ? favSongs : filtered;
 
-  const needAlbums = tab === 'albums' || (openGroup && openGroup.type === 'album');
   const needArtists = tab === 'artists' || (openGroup && openGroup.type === 'artist');
-  const albums = useMemo(() => (needAlbums ? groupSongs(shownSongs, 'album') : []), [shownSongs, needAlbums]);
-  const artists = useMemo(() => (needArtists ? groupSongs(shownSongs, 'artist') : []), [shownSongs, needArtists]);
+  const artists = useMemo(() => (needArtists ? groupSongs(songs, 'artist') : []), [songs, needArtists]);
 
   const visibleAlbums = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -304,9 +371,9 @@ function MusicApp({ settings, updateSettings }) {
 
   const openedGroup = useMemo(() => {
     if (!openGroup) return null;
-    const list = openGroup.type === 'album' ? albums : artists;
+    const list = openGroup.type === 'album' ? allGroups : artists;
     return list.find((g) => g.key === openGroup.key) || null;
-  }, [openGroup, albums, artists]);
+  }, [openGroup, allGroups, artists]);
 
   // ---------- Playback ----------
   const playAt = useCallback(
@@ -323,6 +390,7 @@ function MusicApp({ settings, updateSettings }) {
       };
       try {
         player.replace({ uri: song.uri });
+        player.volume = volumeRef.current;
         player.play();
         player.setActiveForLockScreen(true, meta);
       } catch (e) {}
@@ -334,6 +402,17 @@ function MusicApp({ settings, updateSettings }) {
           } catch (e) {}
         }
       });
+    },
+    [player]
+  );
+
+  // The player's own volume (swipe up / down on the player screen)
+  const setVolume = useCallback(
+    (v) => {
+      volumeRef.current = v;
+      try {
+        player.volume = v;
+      } catch (e) {}
     },
     [player]
   );
@@ -611,14 +690,13 @@ function MusicApp({ settings, updateSettings }) {
   }
 
   const withDetails = songs.filter((x) => x.hasMeta).length;
-  const headerSub =
-    shownSongs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
+  const headerSub = songs.length + ' songs' + (scan ? '  •  reading details ' + scan.done + '/' + scan.total : '');
   const viewIcon = settings.view === 'list' ? 'list' : 'apps';
 
   let emptyText = 'Nothing matches your search.';
   if (songs.length === 0) emptyText = 'No songs found yet.';
-  else if (shownSongs.length === 0) emptyText = 'All your albums are hidden. Show them again in Options.';
   else if (tab === 'favs' && query.trim() === '') emptyText = 'No favorites yet. Tap the heart on a song.';
+  else if (tab === 'albums' && query.trim() === '') emptyText = 'No albums to show. Hidden ones can be shown again in Options.';
 
   const emptyBlock = (
     <View style={s.emptyWrap}>
@@ -697,7 +775,26 @@ function MusicApp({ settings, updateSettings }) {
         </View>
       ) : null}
 
-      {tab === 'albums' ? <Text style={s.noteText}>Tip: long-press an album to select it, then hide it.</Text> : null}
+      {tab === 'albums' ? (
+        <View style={s.actionRow}>
+          <TouchableOpacity
+            style={{ flex: 1 }}
+            onPress={() => setAlbumEditor({ id: null, name: '', songIds: [] })}
+            activeOpacity={0.8}
+          >
+            <LinearGradient
+              colors={[t.accent, t.accent2]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={s.actionButton}
+            >
+              <Ionicons name="add" size={20} color="#fff" />
+              <Text style={s.actionTextWhite}>New album</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+      {tab === 'albums' ? <Text style={s.noteText}>Long-press an album to select it, then hide it.</Text> : null}
 
       {errorText && songs.length > 0 ? <Text style={s.noteText}>{errorText}</Text> : null}
     </View>
@@ -784,7 +881,7 @@ function MusicApp({ settings, updateSettings }) {
   }
 
   return (
-    <View style={s.container}>
+    <LinearGradient colors={[t.bgTop, t.bg]} style={s.container}>
       <StatusBar barStyle={barStyle} backgroundColor="transparent" translucent />
 
       {body}
@@ -844,6 +941,26 @@ function MusicApp({ settings, updateSettings }) {
             <TouchableOpacity style={s.headerBtn} onPress={() => setOpenGroup(null)}>
               <Ionicons name="chevron-back" size={24} color={t.text} />
             </TouchableOpacity>
+            <View style={{ flex: 1 }} />
+            {openedGroup.custom ? (
+              <>
+                <TouchableOpacity
+                  style={s.headerBtn}
+                  onPress={() =>
+                    setAlbumEditor({
+                      id: openedGroup.id,
+                      name: openedGroup.title,
+                      songIds: openedGroup.songs.map((x) => x.id),
+                    })
+                  }
+                >
+                  <Ionicons name="create-outline" size={22} color={t.text} />
+                </TouchableOpacity>
+                <TouchableOpacity style={s.headerBtn} onPress={() => deleteCustomAlbum(openedGroup.id)}>
+                  <Ionicons name="trash-outline" size={22} color="#F87171" />
+                </TouchableOpacity>
+              </>
+            ) : null}
           </View>
           <FlatList
             data={openedGroup.songs}
@@ -932,6 +1049,8 @@ function MusicApp({ settings, updateSettings }) {
         onTogglePlay={togglePlay}
         onSeek={(sec) => player.seekTo(sec)}
         onEdit={(sg) => setEditSong(sg)}
+        volume={volumeRef.current}
+        onVolume={setVolume}
       />
 
       <EditSong
@@ -941,17 +1060,28 @@ function MusicApp({ settings, updateSettings }) {
         onChange={onEditChange}
       />
 
-      <OptionsSheet
-        visible={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        settings={settings}
-        onChange={updateSettings}
-        info={{ ...Lib.getDiagnostics(), songCount: songs.length, withDetails }}
-        onRescan={rescan}
-        hiddenAlbums={hiddenAlbumList}
-        onUnhide={unhideAlbum}
+      <AlbumEditor
+        visible={!!albumEditor}
+        album={albumEditor}
+        songs={sorted}
+        onClose={() => setAlbumEditor(null)}
+        onSave={saveAlbum}
       />
-    </View>
+
+      {/* Options: only exists while it is open, so it shows up instantly */}
+      {sheetOpen ? (
+        <OptionsSheet
+          onClose={() => setSheetOpen(false)}
+          settings={settings}
+          sortMode={sortMode}
+          onChange={updateSettings}
+          info={{ ...Lib.getDiagnostics(), ...Collections.getStorageInfo(), songCount: songs.length, withDetails }}
+          onRescan={rescan}
+          hiddenAlbums={hiddenList}
+          onUnhide={unhideAlbum}
+        />
+      ) : null}
+    </LinearGradient>
   );
 }
 
