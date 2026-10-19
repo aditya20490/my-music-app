@@ -1,4 +1,4 @@
-// Saves your favorites and your hidden albums inside the app only.
+// Saves your favorites, hidden albums and your own albums inside the app only.
 // Nothing here touches the songs on the phone.
 let AS = null;
 try {
@@ -9,35 +9,63 @@ try {
 }
 
 const FAV_KEY = 'mm_favs_v1';
-const HIDDEN_KEY = 'mm_hidden_albums_v1';
+const HIDDEN_KEY = 'mm_hidden_albums_v2'; // v2 keeps the album names too
+const OLD_HIDDEN_KEY = 'mm_hidden_albums_v1'; // from the older build, thrown away
+const ALBUMS_KEY = 'mm_custom_albums_v1';
 
-async function readList(key) {
-  try {
-    const raw = AS ? await AS.getItem(key) : null;
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return arr;
-    }
-  } catch (e) {}
-  return [];
+let storageError = '';
+
+export function getStorageInfo() {
+  return { storageOk: !!AS && !storageError, storageError: AS ? storageError : 'storage library missing' };
 }
 
-async function writeList(key, set) {
+async function readJSON(key, fallback) {
   try {
-    if (AS) await AS.setItem(key, JSON.stringify(Array.from(set)));
-  } catch (e) {}
+    const raw = AS ? await AS.getItem(key) : null;
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    storageError = e && e.message ? String(e.message).slice(0, 120) : 'read failed';
+  }
+  return fallback;
+}
+
+async function writeJSON(key, value) {
+  try {
+    if (!AS) {
+      storageError = 'storage library missing';
+      return;
+    }
+    await AS.setItem(key, JSON.stringify(value));
+    storageError = '';
+  } catch (e) {
+    storageError = e && e.message ? String(e.message).slice(0, 120) : 'save failed';
+  }
 }
 
 export async function loadCollections() {
-  const favs = await readList(FAV_KEY);
-  const hidden = await readList(HIDDEN_KEY);
-  return { favs: new Set(favs), hidden: new Set(hidden) };
+  const favs = await readJSON(FAV_KEY, []);
+  const hiddenRaw = await readJSON(HIDDEN_KEY, {});
+  const albums = await readJSON(ALBUMS_KEY, []);
+  try {
+    if (AS) await AS.removeItem(OLD_HIDDEN_KEY);
+  } catch (e) {}
+  return {
+    favs: new Set(Array.isArray(favs) ? favs : []),
+    hidden: hiddenRaw && typeof hiddenRaw === 'object' && !Array.isArray(hiddenRaw) ? hiddenRaw : {},
+    customAlbums: Array.isArray(albums) ? albums : [],
+  };
 }
 
 export function saveFavs(set) {
-  return writeList(FAV_KEY, set);
+  return writeJSON(FAV_KEY, Array.from(set));
 }
 
-export function saveHidden(set) {
-  return writeList(HIDDEN_KEY, set);
+// hidden: { albumKey: { title, sub } }
+export function saveHidden(hiddenObj) {
+  return writeJSON(HIDDEN_KEY, hiddenObj);
+}
+
+// albums: [{ id, name, songIds: [] }]
+export function saveCustomAlbums(list) {
+  return writeJSON(ALBUMS_KEY, list);
 }
