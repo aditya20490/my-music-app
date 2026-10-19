@@ -7,6 +7,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  PanResponder,
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -57,10 +58,13 @@ export default function NowPlaying({
   duration,
   shuffle,
   repeat,
+  isFav,
+  onToggleFav,
   onToggleShuffle,
   onCycleRepeat,
   onPrev,
   onNext,
+  onSwipePrev,
   onTogglePlay,
   onSeek,
   onEdit,
@@ -74,6 +78,25 @@ export default function NowPlaying({
   const [det, setDet] = useState({ id: null, loading: false, data: null });
   const scrollRef = useRef(null);
   const lineY = useRef({});
+
+  // Swipe left = next song, swipe right = previous song
+  const swipeActions = useRef({ next: null, prev: null });
+  swipeActions.current.next = onNext;
+  swipeActions.current.prev = onSwipePrev || onPrev;
+  const swipe = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (e, g) => Math.abs(g.dx) > 16 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderTerminationRequest: () => true,
+      onPanResponderRelease: (e, g) => {
+        if (g.dx < -60) {
+          if (swipeActions.current.next) swipeActions.current.next();
+        } else if (g.dx > 60) {
+          if (swipeActions.current.prev) swipeActions.current.prev();
+        }
+      },
+    })
+  ).current;
 
   const songId = song ? song.id : null;
 
@@ -158,8 +181,8 @@ export default function NowPlaying({
           )}
         </View>
 
-        {/* Middle area: cover, lyrics or info */}
-        <View style={s.pageArea}>
+        {/* Middle area: cover, lyrics or info. Swipe left / right here to change the song. */}
+        <View style={s.pageArea} {...swipe.panHandlers}>
           {page === 'player' ? (
             <View style={s.fullArt}>
               <Art song={song} size={artSize} radius={28} />
@@ -227,15 +250,26 @@ export default function NowPlaying({
           ) : null}
         </View>
 
-        {/* Title, artist, album */}
-        <View style={s.fullInfo}>
-          <Text style={s.fullTitle} numberOfLines={2}>
-            {song.title}
-          </Text>
-          <Text style={s.fullArtist} numberOfLines={1}>
-            {song.artist || 'Unknown artist'}
-            {song.album ? '  •  ' + song.album : ''}
-          </Text>
+        {/* Title, artist, album, and the favorite heart */}
+        <View style={s.fullInfo} {...swipe.panHandlers}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View style={{ width: 44 }} />
+            <View style={{ flex: 1 }}>
+              <Text style={s.fullTitle} numberOfLines={2}>
+                {song.title}
+              </Text>
+              <Text style={s.fullArtist} numberOfLines={1}>
+                {song.artist || 'Unknown artist'}
+                {song.album ? '  •  ' + song.album : ''}
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={onToggleFav}
+              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Ionicons name={isFav ? 'heart' : 'heart-outline'} size={28} color={isFav ? t.accent : t.text} />
+            </TouchableOpacity>
+          </View>
           <Text style={s.fullSub}>
             {index + 1} of {total}
           </Text>
