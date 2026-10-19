@@ -420,73 +420,9 @@ function MusicApp({ settings, updateSettings }) {
     </View>
   );
 
-  let body;
-  if (loading && songs.length === 0) {
-    body = (
-      <View style={s.center}>
-        <ActivityIndicator color={t.accent} size="large" />
-        <Text style={[s.centerText, { marginTop: 12 }]}>Finding your music...</Text>
-      </View>
-    );
-  } else if (tab === 'songs') {
-    body = (
-      <FlatList
-        key={'songs-' + columns}
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        renderItem={renderSong}
-        extraData={currentId}
-        numColumns={columns}
-        columnWrapperStyle={gridMode ? { gap: GRID_GAP, marginBottom: GRID_GAP } : undefined}
-        getItemLayout={gridMode ? undefined : (data, index) => ({ length: ROW_H, offset: ROW_H * index, index })}
-        initialNumToRender={gridMode ? 12 : 16}
-        maxToRenderPerBatch={12}
-        windowSize={5}
-        removeClippedSubviews
-        refreshing={loading && songs.length > 0}
-        onRefresh={loadSongs}
-        contentContainerStyle={{ paddingBottom: listBottom, paddingTop: gridMode ? 2 : 0 }}
-        ListEmptyComponent={emptyBlock}
-      />
-    );
-  } else if (tab === 'albums') {
-    body = (
-      <FlatList
-        key="albums"
-        data={visibleAlbums}
-        keyExtractor={(item) => item.key}
-        renderItem={renderAlbum}
-        numColumns={2}
-        columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
-        initialNumToRender={8}
-        maxToRenderPerBatch={8}
-        windowSize={5}
-        removeClippedSubviews
-        contentContainerStyle={{ paddingBottom: listBottom, paddingTop: 6 }}
-        ListEmptyComponent={emptyBlock}
-      />
-    );
-  } else {
-    body = (
-      <FlatList
-        key="artists"
-        data={visibleArtists}
-        keyExtractor={(item) => item.key}
-        renderItem={renderArtist}
-        getItemLayout={(data, index) => ({ length: ROW_H, offset: ROW_H * index, index })}
-        initialNumToRender={16}
-        windowSize={5}
-        removeClippedSubviews
-        contentContainerStyle={{ paddingBottom: listBottom }}
-        ListEmptyComponent={emptyBlock}
-      />
-    );
-  }
-
-  return (
-    <View style={[s.container, { paddingTop: insets.top + 12 }]}>
-      <StatusBar barStyle={barStyle} backgroundColor="transparent" translucent />
-
+  // Everything at the top. It lives inside the lists, so it scrolls away with them.
+  const header = (
+    <View style={{ paddingTop: insets.top + 8, paddingBottom: 4 }}>
       {/* Header */}
       <View style={s.headerRow}>
         <View style={{ flex: 1 }}>
@@ -550,6 +486,82 @@ function MusicApp({ settings, updateSettings }) {
       ) : null}
 
       {errorText && songs.length > 0 ? <Text style={s.noteText}>{errorText}</Text> : null}
+    </View>
+  );
+
+  let body;
+  if (loading && songs.length === 0) {
+    body = (
+      <View style={{ flex: 1 }}>
+        {header}
+        <View style={s.center}>
+          <ActivityIndicator color={t.accent} size="large" />
+          <Text style={[s.centerText, { marginTop: 12 }]}>Finding your music...</Text>
+        </View>
+      </View>
+    );
+  } else if (tab === 'songs') {
+    body = (
+      <FlatList
+        key={'songs-' + columns}
+        data={filtered}
+        keyExtractor={(item) => item.id}
+        renderItem={renderSong}
+        extraData={currentId}
+        numColumns={columns}
+        keyboardShouldPersistTaps="handled"
+        columnWrapperStyle={gridMode ? { gap: GRID_GAP, marginBottom: GRID_GAP } : undefined}
+        initialNumToRender={gridMode ? 12 : 16}
+        maxToRenderPerBatch={12}
+        windowSize={5}
+        removeClippedSubviews
+        refreshing={loading && songs.length > 0}
+        onRefresh={loadSongs}
+        contentContainerStyle={{ paddingBottom: listBottom }}
+        ListHeaderComponent={header}
+        ListEmptyComponent={emptyBlock}
+      />
+    );
+  } else if (tab === 'albums') {
+    body = (
+      <FlatList
+        key="albums"
+        data={visibleAlbums}
+        keyExtractor={(item) => item.key}
+        renderItem={renderAlbum}
+        numColumns={2}
+        keyboardShouldPersistTaps="handled"
+        columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        windowSize={5}
+        removeClippedSubviews
+        contentContainerStyle={{ paddingBottom: listBottom }}
+        ListHeaderComponent={header}
+        ListEmptyComponent={emptyBlock}
+      />
+    );
+  } else {
+    body = (
+      <FlatList
+        key="artists"
+        data={visibleArtists}
+        keyExtractor={(item) => item.key}
+        renderItem={renderArtist}
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={16}
+        windowSize={5}
+        removeClippedSubviews
+        contentContainerStyle={{ paddingBottom: listBottom }}
+        ListHeaderComponent={header}
+        ListEmptyComponent={emptyBlock}
+      />
+    );
+  }
+
+  return (
+    <View style={s.container}>
+      <StatusBar barStyle={barStyle} backgroundColor="transparent" translucent />
 
       {body}
 
