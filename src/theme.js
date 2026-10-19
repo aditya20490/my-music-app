@@ -109,10 +109,10 @@ export function makeStyles(t) {
     rowTime: { color: t.muted, fontSize: 12 },
     rowNote: { marginLeft: 8 },
 
-    // grid tiles
-    tile: { borderRadius: 14, overflow: 'hidden', backgroundColor: t.card, marginBottom: 12 },
-    tileScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 8, paddingBottom: 8, paddingTop: 30 },
-    tileTitle: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+    // grid tiles (square, no rounded corners, title at the very bottom)
+    tile: { overflow: 'hidden', backgroundColor: t.card },
+    tileScrim: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 6, paddingBottom: 5, paddingTop: 22 },
+    tileTitle: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
     tileArtist: { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 1 },
     badge: {
       position: 'absolute',
@@ -124,7 +124,7 @@ export function makeStyles(t) {
       borderRadius: 8,
     },
     badgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '600' },
-    tileActive: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderWidth: 3, borderRadius: 14 },
+    tileActive: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, borderWidth: 3 },
 
     // albums / artists
     groupTitle: { color: t.text, fontSize: 14, fontWeight: '700', marginTop: 8 },
