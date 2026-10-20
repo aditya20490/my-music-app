@@ -1,5 +1,7 @@
 // The full-screen player: cover, lyrics, song details and the big controls.
 // Swipe left / right = change song (the card slides). Swipe up / down = volume.
+// Double tap the cover: left side = back 10 seconds, right side = forward 10 seconds.
+// The 8D pill turns the 8D effect on / off.
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -9,6 +11,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Alert,
   PanResponder,
   Animated,
   Easing,
@@ -21,6 +24,7 @@ import { useTheme } from './theme';
 import { Art, SeekBar } from './ui';
 import { fetchLyrics, fetchDetails } from './library';
 import { formatTime, parseLyrics, lyricIndexAt } from './utils';
+import * as Engine from './audioEngine';
 
 function buildInfoRows(song, d) {
   const rows = [];
@@ -91,6 +95,18 @@ export default function NowPlaying({
   const [det, setDet] = useState({ id: null, loading: false, data: null });
   const [vol, setVol] = useState(typeof volume === 'number' ? volume : 1);
   const [volShown, setVolShown] = useState(false);
+  const [eightD, setEightD] = useState(() => Engine.player.isEightD());
+
+  const onToggleEightD = async () => {
+    if (!Engine.eightDSupported) {
+      Alert.alert('8D not available', 'This build of the app does not include the 8D engine. Install the newest build from GitHub Releases.');
+      return;
+    }
+    const want = !Engine.player.isEightD();
+    const on = await Engine.player.setEightD(want);
+    setEightD(on);
+    if (want && !on) Alert.alert('8D failed', 'Could not start 8D for this song.');
+  };
   const scrollRef = useRef(null);
   const lineY = useRef({});
 
@@ -112,6 +128,30 @@ export default function NowPlaying({
   const busy = useRef(false);
   const act = useRef({});
   act.current = { next: onNext, prev: onSwipePrev || onPrev, volume: onVolume };
+
+  // ----- double tap to seek 10 seconds -----
+  const lastTap = useRef({ t: 0, side: 0 });
+  const timeRef = useRef({ cur: 0, dur: 0, seek: onSeek });
+  timeRef.current = { cur: currentTime, dur: duration, seek: onSeek };
+  const [flash, setFlash] = useState(0); // -1 back, 1 forward, 0 none
+  const flashTimer = useRef(null);
+  const onCoverTap = (e) => {
+    const side = e.nativeEvent.pageX < widthRef.current / 2 ? -1 : 1;
+    const now = Date.now();
+    const last = lastTap.current;
+    if (now - last.t < 320 && last.side === side) {
+      lastTap.current = { t: 0, side: 0 };
+      const { cur, dur, seek } = timeRef.current;
+      let target = cur + side * 10;
+      target = Math.max(0, dur > 0 ? Math.min(dur - 0.5, target) : target);
+      if (seek) seek(target);
+      setFlash(side);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setFlash(0), 650);
+    } else {
+      lastTap.current = { t: now, side };
+    }
+  };
 
   const measureCover = () => {
     if (coverBox.current && coverBox.current.measureInWindow) {
@@ -308,11 +348,32 @@ export default function NowPlaying({
         <Animated.View style={{ flex: 1, opacity: cardOpacity, transform: [{ translateX: tx }] }} {...pan.panHandlers}>
           <View style={s.pageArea}>
             {page === 'player' ? (
-              <View style={s.fullArt}>
-                <View ref={coverBox} collapsable={false} onLayout={measureCover}>
-                  <Art song={song} size={artSize} radius={28} />
+              <TouchableOpacity activeOpacity={1} onPress={onCoverTap} style={{ flex: 1 }}>
+                <View style={s.fullArt}>
+                  <View ref={coverBox} collapsable={false} onLayout={measureCover}>
+                    <Art song={song} size={artSize} radius={28} />
+                  </View>
                 </View>
-              </View>
+                {flash !== 0 ? (
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      [flash < 0 ? 'left' : 'right']: 0,
+                      width: '40%',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <View style={{ alignItems: 'center', padding: 14, borderRadius: 40, backgroundColor: 'rgba(0,0,0,0.55)' }}>
+                      <Ionicons name={flash < 0 ? 'play-back' : 'play-forward'} size={28} color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '800', marginTop: 2 }}>{flash < 0 ? '-10s' : '+10s'}</Text>
+                    </View>
+                  </View>
+                ) : null}
+              </TouchableOpacity>
             ) : null}
 
             {page === 'lyrics' ? (
@@ -409,9 +470,29 @@ export default function NowPlaying({
                 <Ionicons name={isFav ? 'heart' : 'heart-outline'} size={28} color={isFav ? t.accent : t.text} />
               </TouchableOpacity>
             </View>
-            <Text style={s.fullSub}>
-              {index + 1} of {total}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 6 }}>
+              <Text style={s.fullSub}>
+                {index + 1} of {total}
+              </Text>
+              <TouchableOpacity
+                onPress={onToggleEightD}
+                activeOpacity={0.8}
+                style={{
+                  marginLeft: 14,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingHorizontal: 12,
+                  paddingVertical: 5,
+                  borderRadius: 16,
+                  borderWidth: 1.5,
+                  borderColor: eightD ? t.accent : t.muted,
+                  backgroundColor: eightD ? t.accent : 'transparent',
+                }}
+              >
+                <Ionicons name="headset" size={15} color={eightD ? '#fff' : t.muted} />
+                <Text style={{ marginLeft: 5, fontSize: 13, fontWeight: '800', color: eightD ? '#fff' : t.muted }}>8D</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </Animated.View>
 
