@@ -16,23 +16,9 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
-
-// Settings shared by the module and whatever engine is playing right now.
-// They live here (not in the engine) so they survive a song change.
-class EightDParams {
-  @Volatile var speed = 0.6f      // 0..1  rotation speed (slow .. fast)
-  @Volatile var intensity = 1f    // 0..1  how far the sound moves
-  @Volatile var room = 0.5f       // 0..1  room size
-  @Volatile var reverb = 0.5f     // 0..1  reverb amount
-  @Volatile var tilt = false      // false = automatic rotation, true = phone tilt
-  @Volatile var tiltTarget = 0f   // -1 (left) .. +1 (right), written by the motion sensor
-}
 
 // Bridge to JS. The normal player keeps running (muted) as the clock and media session;
 // this plays the same file with the 8D effect on top.
@@ -76,13 +62,14 @@ class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ct
     engine?.volume = v.toFloat()
   }
 
-  // speed, intensity, room, reverb are 0..1. tilt = true switches to phone-tilt mode.
+  // speed, intensity, room, reverb, bass are 0..1 (bass 0.5 = normal). tilt = true switches to phone-tilt mode.
   @ReactMethod
-  fun setParams(speed: Double, intensity: Double, room: Double, reverb: Double, tilt: Boolean) {
+  fun setParams(speed: Double, intensity: Double, room: Double, reverb: Double, bass: Double, tilt: Boolean) {
     params.speed = speed.toFloat().coerceIn(0f, 1f)
     params.intensity = intensity.toFloat().coerceIn(0f, 1f)
     params.room = room.toFloat().coerceIn(0f, 1f)
     params.reverb = reverb.toFloat().coerceIn(0f, 1f)
+    params.bass = bass.toFloat().coerceIn(0f, 1f)
     params.tilt = tilt
     engine?.syncTilt()
   }
@@ -195,150 +182,6 @@ class EightDEngine(
       .build()
   }
 
-  // ---------- The 8D effect ----------
-  private class Dsp(val sr: Int, val params: EightDParams) {
-    var phase = 0.0
-    val maxDelay = 40
-    val dl = FloatArray(maxDelay + 2)
-    val dr = FloatArray(maxDelay + 2)
-    var dpos = 0
-    var lpL = 0f
-    var lpR = 0f
-
-    // smoothed copies of the settings, so moving a slider never clicks
-    var roomS = params.room
-    var reverbS = params.reverb
-    var speedS = params.speed
-    var intensityS = params.intensity
-    var pS = 0f
-    var backS = 0f
-
-    // reverb: 4 comb filters per side, delay length follows the room size
-    val combMs = floatArrayOf(29.7f, 37.1f, 41.1f, 43.7f)
-    val combLen = (0.09f * sr).toInt() + 8
-    val combL = Array(4) { FloatArray(combLen) }
-    val combR = Array(4) { FloatArray(combLen) }
-    val curDL = FloatArray(4) { combMs[it] * 0.001f * sr }
-    val curDR = FloatArray(4) { (combMs[it] + 1.7f) * 0.001f * sr }
-    var w = 0
-
-    fun reset() {
-      dl.fill(0f); dr.fill(0f); lpL = 0f; lpR = 0f
-      for (c in combL) c.fill(0f)
-      for (c in combR) c.fill(0f)
-    }
-
-    private fun readComb(buf: FloatArray, d: Float): Float {
-      var p = w - d
-      if (p < 0f) p += combLen
-      val i0 = p.toInt()
-      val f = p - i0
-      val a = buf[i0 % combLen]
-      val b = buf[(i0 + 1) % combLen]
-      return a * (1f - f) + b * f
-    }
-
-    // inp: interleaved L R floats (-1..1). out: same.
-    fun process(inp: FloatArray, out: FloatArray, frames: Int) {
-      // ease the settings towards what the sliders say (once per block)
-      roomS += (params.room - roomS) * 0.25f
-      reverbS += (params.reverb - reverbS) * 0.25f
-      speedS += (params.speed - speedS) * 0.25f
-      intensityS += (params.intensity - intensityS) * 0.25f
-
-      val tilt = params.tilt
-      val period = 16.0 - 13.0 * speedS // seconds for one full turn: 16 s (slow) .. 3 s (fast)
-      val step = 2.0 * PI / (sr * period)
-      val feedback = 0.35f + 0.4f * roomS
-      val dScale = 0.5f + roomS
-      val itd = (maxDelay - 2) * 0.6f * (0.5f + roomS) // far-ear delay: bigger room = wider head
-      val sideG = 0.15f + 0.4f * roomS                 // stereo width kept from the song
-      val wet = 0.14f * reverbS
-      val inten = intensityS
-      val kPan = if (tilt) 0.0006f else 0.004f
-      val kDel = 0.0004f
-
-      for (i in 0 until frames) {
-        val l = inp[i * 2]
-        val r = inp[i * 2 + 1]
-        val mid = (l + r) * 0.5f
-        val side = (l - r) * 0.5f
-
-        val pT: Float
-        val backT: Float
-        if (tilt) {
-          pT = params.tiltTarget * inten
-          backT = 0f
-        } else {
-          pT = sin(phase).toFloat() * inten // -1 left .. +1 right
-          backT = max(0f, -cos(phase).toFloat()) * inten // 0 front .. 1 behind
-          phase += step
-          if (phase > 2 * PI) phase -= 2 * PI
-        }
-        pS += kPan * (pT - pS)
-        backS += kPan * (backT - backS)
-        val p = pS
-        val back = backS
-
-        // equal power pan of the centre
-        val ang = (p + 1f) * (PI.toFloat() / 4f)
-        var ml = mid * cos(ang) * 1.4142f
-        var mr = mid * sin(ang) * 1.4142f
-
-        // tiny delay on the far ear
-        dl[dpos] = ml
-        dr[dpos] = mr
-        val dlyL = max(0f, p) * itd
-        val dlyR = max(0f, -p) * itd
-        ml = frac(dl, dpos, dlyL)
-        mr = frac(dr, dpos, dlyR)
-        dpos = (dpos + 1) % dl.size
-
-        // sound behind you is darker and a bit quieter
-        val a = 1f - 0.75f * back
-        lpL += a * (ml - lpL)
-        lpR += a * (mr - lpR)
-        val g = 1f - 0.2f * back
-        var oL = lpL * g + side * sideG
-        var oR = lpR * g - side * sideG
-
-        // reverb
-        var wl = 0f
-        var wr = 0f
-        for (k in 0 until 4) {
-          curDL[k] += (combMs[k] * 0.001f * sr * dScale - curDL[k]) * kDel
-          curDR[k] += ((combMs[k] + 1.7f) * 0.001f * sr * dScale - curDR[k]) * kDel
-          val yl = readComb(combL[k], curDL[k])
-          val yr = readComb(combR[k], curDR[k])
-          combL[k][w] = mid + yl * feedback
-          combR[k][w] = mid + yr * feedback
-          wl += yl
-          wr += yr
-        }
-        w = (w + 1) % combLen
-        oL += wl * wet
-        oR += wr * wet
-
-        out[i * 2] = soft(oL * 0.9f)
-        out[i * 2 + 1] = soft(oR * 0.9f)
-      }
-    }
-
-    private fun frac(buf: FloatArray, pos: Int, d: Float): Float {
-      val n = buf.size
-      val di = d.toInt()
-      val f = d - di
-      val a = buf[((pos - di) % n + n) % n]
-      val b = buf[((pos - di - 1) % n + n) % n]
-      return a * (1f - f) + b * f
-    }
-
-    private fun soft(x: Float): Float {
-      val ax = abs(x)
-      return if (ax < 0.8f) x else (if (x > 0) 1f else -1f) * (0.8f + 0.2f * (1f - Math.exp(-((ax - 0.8f) * 5.0)).toFloat()))
-    }
-  }
-
   private fun run() {
     var extractor: MediaExtractor? = null
     var codec: MediaCodec? = null
@@ -364,7 +207,7 @@ class EightDEngine(
       rate = sr
       var tr = makeTrack(sr)
       track = tr
-      var dsp = Dsp(sr, params)
+      var dsp = EightDDsp(sr, params)
       var trackPlaying = false
 
       val info = MediaCodec.BufferInfo()
@@ -426,7 +269,7 @@ class EightDEngine(
             rate = sr
             tr = makeTrack(sr)
             track = tr
-            dsp = Dsp(sr, params)
+            dsp = EightDDsp(sr, params)
             trackPlaying = false
           }
         } else if (ob >= 0) {
