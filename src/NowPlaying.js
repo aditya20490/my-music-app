@@ -1,7 +1,8 @@
 // The full-screen player: cover, lyrics, song details and the big controls.
 // Swipe left / right = change song (the card slides). Swipe up / down = volume.
 // Double tap the cover: left side = back 10 seconds, right side = forward 10 seconds.
-// The 8D pill turns the 8D effect on / off.
+// The 8D pill turns the 8D effect on / off. The slider button next to it opens the 8D settings
+// (automatic rotation or phone tilt, room size, rotation speed, movement intensity, reverb).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -55,6 +56,40 @@ function buildInfoRows(song, d) {
   return rows;
 }
 
+// A slider that tells you its value all the time while you drag (the 8D sound changes live)
+function EightSlider({ label, value, onChange, disabled, note }) {
+  const { t, s } = useTheme();
+  const wRef = useRef(1);
+  const frac = (e) => Math.max(0, Math.min(1, e.nativeEvent.locationX / wRef.current));
+  return (
+    <View style={{ marginTop: 14, opacity: disabled ? 0.4 : 1 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Text style={{ color: t.text, fontSize: 14, fontWeight: '700' }}>{label}</Text>
+        <Text style={{ color: t.muted, fontSize: 13, fontWeight: '700' }}>{Math.round(value * 100) + '%'}</Text>
+      </View>
+      <View
+        style={s.seekTouch}
+        onLayout={(e) => {
+          wRef.current = e.nativeEvent.layout.width || 1;
+        }}
+        onStartShouldSetResponder={() => !disabled}
+        onMoveShouldSetResponder={() => !disabled}
+        onResponderTerminationRequest={() => false}
+        onResponderGrant={(e) => onChange(frac(e))}
+        onResponderMove={(e) => onChange(frac(e))}
+      >
+        <View pointerEvents="none" style={s.seekInner}>
+          <View style={s.seekTrack}>
+            <View style={[s.seekFill, { width: value * 100 + '%' }]} />
+          </View>
+          <View style={[s.seekThumb, { left: value * 100 + '%' }]} />
+        </View>
+      </View>
+      {note ? <Text style={{ color: t.muted, fontSize: 11, marginTop: -2 }}>{note}</Text> : null}
+    </View>
+  );
+}
+
 function volumeIcon(v) {
   if (v <= 0.01) return 'volume-mute';
   if (v < 0.4) return 'volume-low';
@@ -96,6 +131,27 @@ export default function NowPlaying({
   const [vol, setVol] = useState(typeof volume === 'number' ? volume : 1);
   const [volShown, setVolShown] = useState(false);
   const [eightD, setEightD] = useState(() => Engine.player.isEightD());
+  const [eightPanel, setEightPanel] = useState(false); // the 8D settings sheet
+  const [eset, setEset] = useState(() => Engine.getEightSettings());
+
+  const changeEight = (patch) => {
+    setEset((old) => ({ ...old, ...patch }));
+    Engine.setEightSettings(patch);
+  };
+
+  // Switch between automatic rotation and phone tilt
+  const chooseMode = async (mode) => {
+    if (mode === eset.mode) return;
+    if (mode === 'tilt') {
+      // Android does not ask for any permission to read the tilt sensor, but the phone must have one
+      const ok = await Engine.tiltAvailable();
+      if (!ok) {
+        Alert.alert('Tilt mode not available', 'This phone does not have a motion sensor the app can use, so tilt mode cannot work here.');
+        return;
+      }
+    }
+    changeEight({ mode });
+  };
 
   const onToggleEightD = async () => {
     if (!Engine.eightDSupported) {
@@ -105,6 +161,7 @@ export default function NowPlaying({
     const want = !Engine.player.isEightD();
     const on = await Engine.player.setEightD(want);
     setEightD(on);
+    if (!on) setEightPanel(false);
     if (want && !on) Alert.alert('8D failed', 'Could not start 8D for this song.');
   };
   const scrollRef = useRef(null);
@@ -322,7 +379,10 @@ export default function NowPlaying({
     <Modal
       visible={visible}
       animationType="slide"
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (eightPanel) setEightPanel(false);
+        else onClose();
+      }}
       statusBarTranslucent
       navigationBarTranslucent
     >
@@ -492,6 +552,24 @@ export default function NowPlaying({
                 <Ionicons name="headset" size={15} color={eightD ? '#fff' : t.muted} />
                 <Text style={{ marginLeft: 5, fontSize: 13, fontWeight: '800', color: eightD ? '#fff' : t.muted }}>8D</Text>
               </TouchableOpacity>
+              {eightD ? (
+                <TouchableOpacity
+                  onPress={() => setEightPanel(true)}
+                  activeOpacity={0.8}
+                  style={{
+                    marginLeft: 8,
+                    width: 32,
+                    height: 32,
+                    borderRadius: 16,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 1.5,
+                    borderColor: t.accent,
+                  }}
+                >
+                  <Ionicons name="options" size={17} color={t.accent} />
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
         </Animated.View>
@@ -546,6 +624,78 @@ export default function NowPlaying({
             );
           })}
         </View>
+
+        {/* 8D settings sheet */}
+        {eightPanel ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => setEightPanel(false)}
+              style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' }}
+            />
+            <View
+              style={{
+                backgroundColor: t.card,
+                borderTopLeftRadius: 26,
+                borderTopRightRadius: 26,
+                paddingHorizontal: 20,
+                paddingTop: 14,
+                paddingBottom: insets.bottom + 18,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ color: t.text, fontSize: 18, fontWeight: '800' }}>8D settings</Text>
+                <TouchableOpacity onPress={() => setEightPanel(false)} style={{ padding: 6 }}>
+                  <Ionicons name="close" size={24} color={t.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ flexDirection: 'row', marginTop: 12, backgroundColor: t.track, borderRadius: 14, padding: 3 }}>
+                {[
+                  { key: 'auto', icon: 'sync', label: 'Automatic' },
+                  { key: 'tilt', icon: 'phone-portrait', label: 'Tilt' },
+                ].map((m) => {
+                  const on = eset.mode === m.key;
+                  return (
+                    <TouchableOpacity
+                      key={m.key}
+                      onPress={() => chooseMode(m.key)}
+                      activeOpacity={0.8}
+                      style={{
+                        flex: 1,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingVertical: 9,
+                        borderRadius: 11,
+                        backgroundColor: on ? t.accent : 'transparent',
+                      }}
+                    >
+                      <Ionicons name={m.icon} size={16} color={on ? t.onAccent : t.muted} />
+                      <Text style={{ marginLeft: 6, fontSize: 14, fontWeight: '800', color: on ? t.onAccent : t.muted }}>{m.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={{ color: t.muted, fontSize: 12, marginTop: 8 }}>
+                {eset.mode === 'tilt'
+                  ? 'Tilt your phone left or right to move the sound. Hold it level for the center.'
+                  : 'The sound keeps rotating around you by itself.'}
+              </Text>
+
+              <EightSlider label="Room size" value={eset.room} onChange={(v) => changeEight({ room: v })} />
+              <EightSlider
+                label="Rotation speed"
+                value={eset.speed}
+                onChange={(v) => changeEight({ speed: v })}
+                disabled={eset.mode === 'tilt'}
+                note={eset.mode === 'tilt' ? 'Not used in tilt mode' : null}
+              />
+              <EightSlider label="Movement intensity" value={eset.intensity} onChange={(v) => changeEight({ intensity: v })} />
+              <EightSlider label="Reverb" value={eset.reverb} onChange={(v) => changeEight({ reverb: v })} />
+            </View>
+          </View>
+        ) : null}
 
         {/* Volume pill, shows while you swipe up / down */}
         {volShown ? (
