@@ -50,6 +50,11 @@ jobs:
           npx expo install expo-media-library expo-file-system expo-image-picker expo-linear-gradient react-native-safe-area-context @expo/vector-icons expo-font @react-native-async-storage/async-storage
           npx expo install --fix
           npm install react-native-track-player@^4.1.1
+          # track-player's Kotlin code breaks with the newest React Native (Bundle? vs Bundle), so we fix it here
+          MM=node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
+          echo "Before patch:"; grep -n "toBundle" "$MM" || true
+          perl -0pi -e 's/(Arguments\.toBundle(\((?:[^()]|(?2))*\)))(?!!)/$1!!/g' "$MM"
+          echo "After patch:"; grep -n "toBundle" "$MM" || true
           npm install @missingcore/react-native-metadata-retriever@^3.2.1 || echo "Song details library failed to install, continuing without it"
 
       - name: Set app name, package and permissions
