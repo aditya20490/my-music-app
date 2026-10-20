@@ -1,6 +1,10 @@
 package com.mymusic.player
 
 import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -19,10 +23,22 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
+// Settings shared by the module and whatever engine is playing right now.
+// They live here (not in the engine) so they survive a song change.
+class EightDParams {
+  @Volatile var speed = 0.6f      // 0..1  rotation speed (slow .. fast)
+  @Volatile var intensity = 1f    // 0..1  how far the sound moves
+  @Volatile var room = 0.5f       // 0..1  room size
+  @Volatile var reverb = 0.5f     // 0..1  reverb amount
+  @Volatile var tilt = false      // false = automatic rotation, true = phone tilt
+  @Volatile var tiltTarget = 0f   // -1 (left) .. +1 (right), written by the motion sensor
+}
+
 // Bridge to JS. The normal player keeps running (muted) as the clock and media session;
 // this plays the same file with the 8D effect on top.
 class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
   private var engine: EightDEngine? = null
+  private val params = EightDParams()
 
   override fun getName(): String = "EightD"
 
@@ -30,7 +46,7 @@ class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ct
   fun start(uri: String, posMs: Double, volume: Double, playing: Boolean, promise: Promise) {
     try {
       engine?.release()
-      val e = EightDEngine(reactApplicationContext.applicationContext, uri, posMs.toLong(), volume.toFloat(), playing)
+      val e = EightDEngine(reactApplicationContext.applicationContext, uri, posMs.toLong(), volume.toFloat(), playing, params)
       engine = e
       e.begin()
       promise.resolve(true)
@@ -60,6 +76,28 @@ class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ct
     engine?.volume = v.toFloat()
   }
 
+  // speed, intensity, room, reverb are 0..1. tilt = true switches to phone-tilt mode.
+  @ReactMethod
+  fun setParams(speed: Double, intensity: Double, room: Double, reverb: Double, tilt: Boolean) {
+    params.speed = speed.toFloat().coerceIn(0f, 1f)
+    params.intensity = intensity.toFloat().coerceIn(0f, 1f)
+    params.room = room.toFloat().coerceIn(0f, 1f)
+    params.reverb = reverb.toFloat().coerceIn(0f, 1f)
+    params.tilt = tilt
+    engine?.syncTilt()
+  }
+
+  // Does this phone have a motion sensor we can use? (No permission is needed for it.)
+  @ReactMethod
+  fun tiltAvailable(promise: Promise) {
+    try {
+      val sm = reactApplicationContext.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+      promise.resolve(sm != null && sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null)
+    } catch (t: Throwable) {
+      promise.resolve(false)
+    }
+  }
+
   @ReactMethod
   fun getPosition(promise: Promise) {
     promise.resolve((engine?.positionMs() ?: -1L).toDouble())
@@ -71,7 +109,8 @@ class EightDEngine(
   private val uri: String,
   startMs: Long,
   @Volatile var volume: Float,
-  @Volatile var playing: Boolean
+  @Volatile var playing: Boolean,
+  private val params: EightDParams
 ) {
   @Volatile var seekReq: Long = startMs
   @Volatile private var stopped = false
@@ -80,7 +119,40 @@ class EightDEngine(
   @Volatile private var track: AudioTrack? = null
   private var thread: Thread? = null
 
+  // ---------- motion sensor (tilt mode) ----------
+  private val sm: SensorManager? = ctx.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+  private var tiltOn = false
+  private val sensorListener = object : SensorEventListener {
+    override fun onSensorChanged(e: SensorEvent) {
+      // x is the sideways axis: tilting the right edge down makes x negative
+      var v = -e.values[0] / 4.9f // about 30 degrees of tilt = full left / right
+      val dead = 0.06f
+      v = if (abs(v) < dead) 0f else (if (v > 0) 1f else -1f) * (abs(v) - dead) / (1f - dead)
+      v = max(-1f, min(1f, v))
+      params.tiltTarget += (v - params.tiltTarget) * 0.2f // smooth the sensor
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+  }
+
+  @Synchronized
+  fun syncTilt() {
+    val want = params.tilt && !stopped
+    if (want && !tiltOn) {
+      val s = sm?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+      if (s != null) {
+        // SENSOR_DELAY_GAME is about 50 updates a second: no special permission needed
+        tiltOn = sm.registerListener(sensorListener, s, SensorManager.SENSOR_DELAY_GAME)
+      }
+    } else if (!want && tiltOn) {
+      try { sm?.unregisterListener(sensorListener) } catch (e: Throwable) {}
+      tiltOn = false
+      params.tiltTarget = 0f
+    }
+  }
+
   fun begin() {
+    syncTilt()
     val t = Thread({ run() }, "eightd-decoder")
     t.isDaemon = true
     thread = t
@@ -89,6 +161,7 @@ class EightDEngine(
 
   fun release() {
     stopped = true
+    syncTilt()
   }
 
   fun positionMs(): Long {
@@ -123,19 +196,31 @@ class EightDEngine(
   }
 
   // ---------- The 8D effect ----------
-  private class Dsp(var sr: Int) {
+  private class Dsp(val sr: Int, val params: EightDParams) {
     var phase = 0.0
     val maxDelay = 40
-    var dl = FloatArray(maxDelay + 2)
-    var dr = FloatArray(maxDelay + 2)
+    val dl = FloatArray(maxDelay + 2)
+    val dr = FloatArray(maxDelay + 2)
     var dpos = 0
     var lpL = 0f
     var lpR = 0f
-    // little reverb: 4 comb filters per side
+
+    // smoothed copies of the settings, so moving a slider never clicks
+    var roomS = params.room
+    var reverbS = params.reverb
+    var speedS = params.speed
+    var intensityS = params.intensity
+    var pS = 0f
+    var backS = 0f
+
+    // reverb: 4 comb filters per side, delay length follows the room size
     val combMs = floatArrayOf(29.7f, 37.1f, 41.1f, 43.7f)
-    var combL = Array(4) { FloatArray((combMs[it] * sr / 1000f).toInt() + 1) }
-    var combR = Array(4) { FloatArray(((combMs[it] + 1.7f) * sr / 1000f).toInt() + 1) }
-    val ci = IntArray(4)
+    val combLen = (0.09f * sr).toInt() + 8
+    val combL = Array(4) { FloatArray(combLen) }
+    val combR = Array(4) { FloatArray(combLen) }
+    val curDL = FloatArray(4) { combMs[it] * 0.001f * sr }
+    val curDR = FloatArray(4) { (combMs[it] + 1.7f) * 0.001f * sr }
+    var w = 0
 
     fun reset() {
       dl.fill(0f); dr.fill(0f); lpL = 0f; lpR = 0f
@@ -143,18 +228,57 @@ class EightDEngine(
       for (c in combR) c.fill(0f)
     }
 
-    // in: interleaved L R floats (-1..1). out: same.
+    private fun readComb(buf: FloatArray, d: Float): Float {
+      var p = w - d
+      if (p < 0f) p += combLen
+      val i0 = p.toInt()
+      val f = p - i0
+      val a = buf[i0 % combLen]
+      val b = buf[(i0 + 1) % combLen]
+      return a * (1f - f) + b * f
+    }
+
+    // inp: interleaved L R floats (-1..1). out: same.
     fun process(inp: FloatArray, out: FloatArray, frames: Int) {
-      val step = 2.0 * PI / (sr * 8.0) // one full turn every 8 seconds
+      // ease the settings towards what the sliders say (once per block)
+      roomS += (params.room - roomS) * 0.25f
+      reverbS += (params.reverb - reverbS) * 0.25f
+      speedS += (params.speed - speedS) * 0.25f
+      intensityS += (params.intensity - intensityS) * 0.25f
+
+      val tilt = params.tilt
+      val period = 16.0 - 13.0 * speedS // seconds for one full turn: 16 s (slow) .. 3 s (fast)
+      val step = 2.0 * PI / (sr * period)
+      val feedback = 0.35f + 0.4f * roomS
+      val dScale = 0.5f + roomS
+      val itd = (maxDelay - 2) * 0.6f * (0.5f + roomS) // far-ear delay: bigger room = wider head
+      val sideG = 0.15f + 0.4f * roomS                 // stereo width kept from the song
+      val wet = 0.14f * reverbS
+      val inten = intensityS
+      val kPan = if (tilt) 0.0006f else 0.004f
+      val kDel = 0.0004f
+
       for (i in 0 until frames) {
         val l = inp[i * 2]
         val r = inp[i * 2 + 1]
         val mid = (l + r) * 0.5f
         val side = (l - r) * 0.5f
-        val p = sin(phase).toFloat() // -1 left .. +1 right
-        val back = max(0f, -cos(phase).toFloat()) // 0 front .. 1 behind
-        phase += step
-        if (phase > 2 * PI) phase -= 2 * PI
+
+        val pT: Float
+        val backT: Float
+        if (tilt) {
+          pT = params.tiltTarget * inten
+          backT = 0f
+        } else {
+          pT = sin(phase).toFloat() * inten // -1 left .. +1 right
+          backT = max(0f, -cos(phase).toFloat()) * inten // 0 front .. 1 behind
+          phase += step
+          if (phase > 2 * PI) phase -= 2 * PI
+        }
+        pS += kPan * (pT - pS)
+        backS += kPan * (backT - backS)
+        val p = pS
+        val back = backS
 
         // equal power pan of the centre
         val ang = (p + 1f) * (PI.toFloat() / 4f)
@@ -164,8 +288,8 @@ class EightDEngine(
         // tiny delay on the far ear
         dl[dpos] = ml
         dr[dpos] = mr
-        val dlyL = max(0f, p) * (maxDelay - 2) * 0.6f
-        val dlyR = max(0f, -p) * (maxDelay - 2) * 0.6f
+        val dlyL = max(0f, p) * itd
+        val dlyR = max(0f, -p) * itd
         ml = frac(dl, dpos, dlyL)
         mr = frac(dr, dpos, dlyR)
         dpos = (dpos + 1) % dl.size
@@ -175,31 +299,28 @@ class EightDEngine(
         lpL += a * (ml - lpL)
         lpR += a * (mr - lpR)
         val g = 1f - 0.2f * back
-        var ol = lpL * g + side * 0.35f
-        var or = lpR * g - side * 0.35f
+        var oL = lpL * g + side * sideG
+        var oR = lpR * g - side * sideG
 
         // reverb
         var wl = 0f
         var wr = 0f
         for (k in 0 until 4) {
-          val bl = combL[k]
-          val br = combR[k]
-          val idx = ci[k]
-          val il = idx % bl.size
-          val ir = idx % br.size
-          val yl = bl[il]
-          val yr = br[ir]
-          bl[il] = mid + yl * 0.55f
-          br[ir] = mid + yr * 0.55f
+          curDL[k] += (combMs[k] * 0.001f * sr * dScale - curDL[k]) * kDel
+          curDR[k] += ((combMs[k] + 1.7f) * 0.001f * sr * dScale - curDR[k]) * kDel
+          val yl = readComb(combL[k], curDL[k])
+          val yr = readComb(combR[k], curDR[k])
+          combL[k][w] = mid + yl * feedback
+          combR[k][w] = mid + yr * feedback
           wl += yl
           wr += yr
-          ci[k] = idx + 1
         }
-        ol += wl * 0.07f
-        or += wr * 0.07f
+        w = (w + 1) % combLen
+        oL += wl * wet
+        oR += wr * wet
 
-        out[i * 2] = soft(ol * 0.9f)
-        out[i * 2 + 1] = soft(or * 0.9f)
+        out[i * 2] = soft(oL * 0.9f)
+        out[i * 2 + 1] = soft(oR * 0.9f)
       }
     }
 
@@ -243,7 +364,7 @@ class EightDEngine(
       rate = sr
       var tr = makeTrack(sr)
       track = tr
-      var dsp = Dsp(sr)
+      var dsp = Dsp(sr, params)
       var trackPlaying = false
 
       val info = MediaCodec.BufferInfo()
@@ -305,7 +426,7 @@ class EightDEngine(
             rate = sr
             tr = makeTrack(sr)
             track = tr
-            dsp = Dsp(sr)
+            dsp = Dsp(sr, params)
             trackPlaying = false
           }
         } else if (ob >= 0) {
