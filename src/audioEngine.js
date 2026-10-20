@@ -71,6 +71,7 @@ export const eightDSupported = !!Native;
 const eight = { on: false, song: null, volume: 1, playing: true };
 
 // The 8D settings (all sliders go from 0 to 1). mode: 'auto' = keeps rotating, 'tilt' = follows the phone's tilt.
+// bass: 0.5 = normal, 0 = -12 dB, 1 = +12 dB.
 let AS = null;
 try {
   const mod = require('@react-native-async-storage/async-storage');
@@ -78,13 +79,13 @@ try {
 } catch (e) {
   AS = null;
 }
-const SETTINGS_KEY = 'eightd.settings.v1';
-const eightSet = { mode: 'auto', speed: 0.6, intensity: 1, room: 0.5, reverb: 0.5 };
+const SETTINGS_KEY = 'eightd.settings.v2'; // v2: new concert-hall sound, so the new defaults apply
+const eightSet = { mode: 'auto', speed: 0.5, intensity: 0.85, room: 0.65, reverb: 0.6, bass: 0.5 };
 
 function pushSettings() {
   if (!Native || !Native.setParams) return;
   try {
-    Native.setParams(eightSet.speed, eightSet.intensity, eightSet.room, eightSet.reverb, eightSet.mode === 'tilt');
+    Native.setParams(eightSet.speed, eightSet.intensity, eightSet.room, eightSet.reverb, eightSet.bass, eightSet.mode === 'tilt');
   } catch (e) {}
 }
 
@@ -114,7 +115,7 @@ async function loadEightSettings() {
       const raw = await AS.getItem(SETTINGS_KEY);
       if (raw) {
         const o = JSON.parse(raw);
-        for (const k of ['speed', 'intensity', 'room', 'reverb']) {
+        for (const k of ['speed', 'intensity', 'room', 'reverb', 'bass']) {
           if (typeof o[k] === 'number') eightSet[k] = Math.max(0, Math.min(1, o[k]));
         }
         if (o.mode === 'auto' || o.mode === 'tilt') eightSet.mode = o.mode;
