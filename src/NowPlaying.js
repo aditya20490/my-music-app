@@ -2,7 +2,7 @@
 // Swipe left / right = change song (the card slides). Swipe up / down = volume.
 // Double tap the cover: left side = back 10 seconds, right side = forward 10 seconds.
 // The 8D pill turns the 8D effect on / off. The slider button next to it opens the 8D settings
-// (automatic rotation or phone tilt, room size, rotation speed, movement intensity, reverb).
+// (automatic rotation or phone tilt, hall presets, room size, rotation speed, movement intensity, reverb, bass).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -57,7 +57,7 @@ function buildInfoRows(song, d) {
 }
 
 // A slider that tells you its value all the time while you drag (the 8D sound changes live)
-function EightSlider({ label, value, onChange, disabled, note }) {
+function EightSlider({ label, value, onChange, disabled, note, format }) {
   const { t, s } = useTheme();
   const wRef = useRef(1);
   const frac = (e) => Math.max(0, Math.min(1, e.nativeEvent.locationX / wRef.current));
@@ -65,7 +65,7 @@ function EightSlider({ label, value, onChange, disabled, note }) {
     <View style={{ marginTop: 14, opacity: disabled ? 0.4 : 1 }}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
         <Text style={{ color: t.text, fontSize: 14, fontWeight: '700' }}>{label}</Text>
-        <Text style={{ color: t.muted, fontSize: 13, fontWeight: '700' }}>{Math.round(value * 100) + '%'}</Text>
+        <Text style={{ color: t.muted, fontSize: 13, fontWeight: '700' }}>{format ? format(value) : Math.round(value * 100) + '%'}</Text>
       </View>
       <View
         style={s.seekTouch}
@@ -89,6 +89,19 @@ function EightSlider({ label, value, onChange, disabled, note }) {
     </View>
   );
 }
+
+// Bass slider: the middle is normal, left is less bass, right is more (-12 dB .. +12 dB)
+function bassLabel(v) {
+  const db = Math.round((v - 0.5) * 24);
+  return (db > 0 ? '+' : '') + db + ' dB';
+}
+
+// Quick hall sizes
+const HALLS = [
+  { key: 'club', icon: 'home', label: 'Club', patch: { room: 0.25, reverb: 0.5 } },
+  { key: 'hall', icon: 'business', label: 'Auditorium', patch: { room: 0.65, reverb: 0.6, intensity: 0.85 } },
+  { key: 'cathedral', icon: 'star', label: 'Cathedral', patch: { room: 1, reverb: 0.75 } },
+];
 
 function volumeIcon(v) {
   if (v <= 0.01) return 'volume-mute';
@@ -650,6 +663,7 @@ export default function NowPlaying({
                 </TouchableOpacity>
               </View>
 
+              <ScrollView style={{ maxHeight: height * 0.7 }} showsVerticalScrollIndicator={false}>
               <View style={{ flexDirection: 'row', marginTop: 12, backgroundColor: t.track, borderRadius: 14, padding: 3 }}>
                 {[
                   { key: 'auto', icon: 'sync', label: 'Automatic' },
@@ -683,6 +697,34 @@ export default function NowPlaying({
                   : 'The sound keeps rotating around you by itself.'}
               </Text>
 
+              <Text style={{ color: t.text, fontSize: 14, fontWeight: '700', marginTop: 16 }}>Hall</Text>
+              <View style={{ flexDirection: 'row', marginTop: 8, gap: 8 }}>
+                {HALLS.map((h) => {
+                  const on = Math.abs(eset.room - h.patch.room) < 0.03 && Math.abs(eset.reverb - h.patch.reverb) < 0.03;
+                  return (
+                    <TouchableOpacity
+                      key={h.key}
+                      onPress={() => changeEight(h.patch)}
+                      activeOpacity={0.8}
+                      style={{
+                        flex: 1,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        paddingVertical: 10,
+                        borderRadius: 14,
+                        borderWidth: 1,
+                        borderColor: on ? t.accent : t.track,
+                        backgroundColor: on ? t.accent : 'transparent',
+                      }}
+                    >
+                      <Ionicons name={h.icon} size={15} color={on ? t.onAccent : t.muted} />
+                      <Text style={{ marginLeft: 5, fontSize: 13, fontWeight: '800', color: on ? t.onAccent : t.muted }}>{h.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
               <EightSlider label="Room size" value={eset.room} onChange={(v) => changeEight({ room: v })} />
               <EightSlider
                 label="Rotation speed"
@@ -693,6 +735,14 @@ export default function NowPlaying({
               />
               <EightSlider label="Movement intensity" value={eset.intensity} onChange={(v) => changeEight({ intensity: v })} />
               <EightSlider label="Reverb" value={eset.reverb} onChange={(v) => changeEight({ reverb: v })} />
+              <EightSlider
+                label="Bass"
+                value={eset.bass}
+                onChange={(v) => changeEight({ bass: Math.abs(v - 0.5) < 0.025 ? 0.5 : v })}
+                format={bassLabel}
+                note="The middle is the normal bass. Left = less, right = more."
+              />
+              </ScrollView>
             </View>
           </View>
         ) : null}
