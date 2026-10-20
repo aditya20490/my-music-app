@@ -47,8 +47,9 @@ jobs:
           rm -rf App.tsx App.js src
           cp ../App.js App.js
           cp -r ../src src
-          npx expo install expo-audio expo-media-library expo-file-system expo-image-picker expo-linear-gradient react-native-safe-area-context @expo/vector-icons expo-font @react-native-async-storage/async-storage
+          npx expo install expo-media-library expo-file-system expo-image-picker expo-linear-gradient react-native-safe-area-context @expo/vector-icons expo-font @react-native-async-storage/async-storage
           npx expo install --fix
+          npm install react-native-track-player@^4.1.1
           npm install @missingcore/react-native-metadata-retriever@^3.2.1 || echo "Song details library failed to install, continuing without it"
 
       - name: Set app name, package and permissions
@@ -75,7 +76,7 @@ jobs:
             'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK',
             'android.permission.WAKE_LOCK'
           ];
-          cfg.expo.plugins = ['expo-audio', 'expo-media-library'];
+          cfg.expo.plugins = ['expo-media-library'];
           fs.writeFileSync('app.json', JSON.stringify(cfg, null, 2));
           "
 
