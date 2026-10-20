@@ -70,9 +70,67 @@ const Native = NativeModules ? NativeModules.EightD : null;
 export const eightDSupported = !!Native;
 const eight = { on: false, song: null, volume: 1, playing: true };
 
+// The 8D settings (all sliders go from 0 to 1). mode: 'auto' = keeps rotating, 'tilt' = follows the phone's tilt.
+let AS = null;
+try {
+  const mod = require('@react-native-async-storage/async-storage');
+  AS = mod.default || mod;
+} catch (e) {
+  AS = null;
+}
+const SETTINGS_KEY = 'eightd.settings.v1';
+const eightSet = { mode: 'auto', speed: 0.6, intensity: 1, room: 0.5, reverb: 0.5 };
+
+function pushSettings() {
+  if (!Native || !Native.setParams) return;
+  try {
+    Native.setParams(eightSet.speed, eightSet.intensity, eightSet.room, eightSet.reverb, eightSet.mode === 'tilt');
+  } catch (e) {}
+}
+
+export function getEightSettings() {
+  return { ...eightSet };
+}
+
+// Change one or more settings. The sound changes right away.
+export function setEightSettings(patch) {
+  Object.assign(eightSet, patch);
+  pushSettings();
+  if (AS) AS.setItem(SETTINGS_KEY, JSON.stringify(eightSet)).catch(() => {});
+}
+
+// Does this phone have a motion sensor for tilt mode? (Android needs no permission for it.)
+export async function tiltAvailable() {
+  try {
+    return !!(Native && Native.tiltAvailable && (await Native.tiltAvailable()));
+  } catch (e) {
+    return false;
+  }
+}
+
+async function loadEightSettings() {
+  try {
+    if (AS) {
+      const raw = await AS.getItem(SETTINGS_KEY);
+      if (raw) {
+        const o = JSON.parse(raw);
+        for (const k of ['speed', 'intensity', 'room', 'reverb']) {
+          if (typeof o[k] === 'number') eightSet[k] = Math.max(0, Math.min(1, o[k]));
+        }
+        if (o.mode === 'auto' || o.mode === 'tilt') eightSet.mode = o.mode;
+      }
+    }
+  } catch (e) {}
+  // tilt mode is only kept if this phone really has the sensor
+  if (eightSet.mode === 'tilt' && !(await tiltAvailable())) eightSet.mode = 'auto';
+  pushSettings();
+}
+loadEightSettings();
+
 async function eightStart(positionSec) {
   if (!Native || !eight.on || !eight.song) return;
   try {
+    pushSettings();
     await Native.start(eight.song.uri, Math.max(0, positionSec) * 1000, eight.volume, eight.playing);
   } catch (e) {
     eight.on = false;
