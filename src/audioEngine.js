@@ -78,6 +78,8 @@ export const player = {
       title: meta.title,
       artist: meta.artist,
       album: meta.album || undefined,
+      // duration lets the phone's island / notification show a real progress bar
+      duration: song.duration > 0 ? song.duration : undefined,
     });
     if (my !== loadId) return;
     try {
@@ -93,6 +95,7 @@ export const player = {
         artist: meta.artist,
         album: meta.album || undefined,
         artwork: uri,
+        duration: meta.duration > 0 ? meta.duration : undefined,
       });
     } catch (e) {}
   },
