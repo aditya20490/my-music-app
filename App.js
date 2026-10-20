@@ -15,7 +15,8 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import TrackPlayer from 'react-native-track-player';
+import * as Engine from './src/audioEngine';
 
 import { ThemeContext, getTheme, makeStyles, useTheme } from './src/theme';
 import * as Lib from './src/library';
@@ -38,6 +39,9 @@ import EditSong from './src/EditSong';
 import FastScroll from './src/FastScroll';
 import AlbumEditor from './src/AlbumEditor';
 import DynamicIsland from './src/DynamicIsland';
+
+// Lets the phone's media notification / island control the player, even with the screen off
+TrackPlayer.registerPlaybackService(() => Engine.playbackService);
 
 const PAD = 16;
 const GAP = 12;
@@ -102,8 +106,8 @@ function MusicApp({ settings, updateSettings }) {
   const fastRef = useRef(null);
   const volumeRef = useRef(1);
 
-  const player = useAudioPlayer(null);
-  const status = useAudioPlayerStatus(player);
+  const player = Engine.player;
+  const status = Engine.usePlayerStatus();
 
   const songsById = useMemo(() => {
     const m = {};
@@ -118,11 +122,7 @@ function MusicApp({ settings, updateSettings }) {
   useEffect(() => {
     (async () => {
       try {
-        await setAudioModeAsync({
-          playsInSilentMode: true,
-          shouldPlayInBackground: true,
-          interruptionMode: 'doNotMix',
-        });
+        await Engine.setupAudio();
       } catch (e) {}
       try {
         const c = await Collections.loadCollections();
@@ -387,20 +387,15 @@ function MusicApp({ settings, updateSettings }) {
       const meta = {
         title: song.title,
         artist: song.artist || 'My Music',
-        albumTitle: song.album || undefined,
+        album: song.album || undefined,
       };
       try {
-        player.replace({ uri: song.uri });
-        player.volume = volumeRef.current;
-        player.play();
-        player.setActiveForLockScreen(true, meta);
+        player.load(song, meta, volumeRef.current).catch(() => {});
       } catch (e) {}
       // Put the cover on the notification / lock screen once it is ready
       Lib.loadArt(song, (u) => {
-        if (u && playingIdRef.current === song.id && typeof player.updateLockScreenMetadata === 'function') {
-          try {
-            player.updateLockScreenMetadata({ ...meta, artworkUrl: u });
-          } catch (e) {}
+        if (u && playingIdRef.current === song.id) {
+          player.setArtwork(u, meta);
         }
       });
     },
@@ -412,7 +407,7 @@ function MusicApp({ settings, updateSettings }) {
     (v) => {
       volumeRef.current = v;
       try {
-        player.volume = v;
+        player.setVolume(v);
       } catch (e) {}
     },
     [player]
@@ -533,10 +528,21 @@ function MusicApp({ settings, updateSettings }) {
 
   // Auto-play the next song when one finishes.
   useEffect(() => {
-    if (status.didJustFinish) {
+    if (status.finishCount > 0) {
       goNext(true);
     }
-  }, [status.didJustFinish]);
+  }, [status.finishCount]);
+
+  // The next / previous buttons on the notification and the island call these
+  const remoteRef = useRef({});
+  remoteRef.current = { next: () => goNext(false), prev: () => goPrev(false) };
+  useEffect(() => {
+    Engine.setRemoteHandlers({
+      next: () => remoteRef.current.next(),
+      prev: () => remoteRef.current.prev(),
+    });
+    return () => Engine.setRemoteHandlers(null);
+  }, []);
 
   function cycleRepeat() {
     const r = settings.repeat;
