@@ -109,8 +109,12 @@ function MusicApp({ settings, updateSettings }) {
   const player = Engine.player;
   const status = Engine.usePlayerStatus();
 
+  // Every song by id. The versions inside a bundle are included too (the bundle's own entry wins for the first version).
   const songsById = useMemo(() => {
     const m = {};
+    for (const sg of songs) {
+      if (sg.versions) for (const v of sg.versions) m[v.id] = v;
+    }
     for (const sg of songs) m[sg.id] = sg;
     return m;
   }, [songs]);
@@ -341,13 +345,14 @@ function MusicApp({ settings, updateSettings }) {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return sorted;
-    return sorted.filter(
-      (x) =>
-        x.title.toLowerCase().includes(q) ||
-        x.artist.toLowerCase().includes(q) ||
-        x.album.toLowerCase().includes(q) ||
-        x.genre.toLowerCase().includes(q)
-    );
+    const hit = (x) =>
+      x.title.toLowerCase().includes(q) ||
+      x.artist.toLowerCase().includes(q) ||
+      x.album.toLowerCase().includes(q) ||
+      x.genre.toLowerCase().includes(q) ||
+      (x.versionLabel || '').toLowerCase().includes(q);
+    // A match inside a bundle (an edit, a remix...) shows the bundle's main song, never the version itself
+    return sorted.filter((x) => hit(x) || (x.versions && x.versions.some(hit)));
   }, [sorted, query]);
 
   const favSongs = useMemo(() => filtered.filter((x) => favs.has(x.id)), [filtered, favs]);
@@ -449,8 +454,30 @@ function MusicApp({ settings, updateSettings }) {
   );
 
   const onEditChange = useCallback((newSong) => {
-    setSongs((prev) => prev.map((x) => (x.id === newSong.id ? newSong : x)));
+    setSongs((prev) =>
+      prev.map((x) => {
+        if (!x.versions) return x.id === newSong.id ? newSong : x;
+        if (!x.versions.some((v) => v.id === newSong.id)) return x;
+        // a song inside a bundle was edited: keep the bundle's version list in step
+        const plain = { ...newSong };
+        delete plain.versions;
+        const nv = x.versions.map((v) => (v.id === newSong.id ? plain : v));
+        if (x.id === newSong.id) return { ...plain, versions: nv };
+        return { ...x, versions: nv };
+      })
+    );
   }, []);
+
+  // Switch the playing song to another version of the same bundle (the queue keeps its place)
+  const playVersion = useCallback(
+    (v) => {
+      if (!v || currentIndex < 0 || queue.length === 0) return;
+      const q = queue.slice();
+      q[currentIndex] = v;
+      playAt(q, currentIndex);
+    },
+    [queue, currentIndex, playAt]
+  );
 
   function playList(list, shuffleMode) {
     if (list.length === 0) return;
@@ -474,7 +501,7 @@ function MusicApp({ settings, updateSettings }) {
       setCurrentIndex(0);
     } else {
       const orig = originalRef.current.length > 0 ? originalRef.current : queue;
-      const at = orig.findIndex((x) => x.id === current.id);
+      const at = orig.findIndex((x) => x.id === (current.bundleId || current.id));
       setQueue(orig);
       setCurrentIndex(at >= 0 ? at : 0);
     }
@@ -556,7 +583,10 @@ function MusicApp({ settings, updateSettings }) {
 
   const duration = status.duration || (current ? current.duration : 0) || 0;
   const progress = duration > 0 ? Math.min(1, status.currentTime / duration) : 0;
-  const currentId = current ? current.id : null;
+  const currentId = current ? current.bundleId || current.id : null; // a playing version lights up its bundle's row
+  const currentBundle = current && current.bundleId ? songsById[current.bundleId] : null;
+  const versionList = currentBundle && currentBundle.versions && currentBundle.versions.length > 1 ? currentBundle.versions : null;
+  const favId = current ? current.bundleId || current.id : null;
 
   // ---------- Slide bar ----------
   const onListScroll = useCallback((e) => {
@@ -1062,10 +1092,12 @@ function MusicApp({ settings, updateSettings }) {
         duration={duration}
         shuffle={settings.shuffle}
         repeat={settings.repeat}
-        isFav={current ? favs.has(current.id) : false}
+        isFav={favId ? favs.has(favId) : false}
         onToggleFav={() => {
-          if (current) toggleFav(current.id);
+          if (favId) toggleFav(favId);
         }}
+        versions={versionList}
+        onPickVersion={playVersion}
         onToggleShuffle={toggleShuffle}
         onCycleRepeat={cycleRepeat}
         onPrev={() => goPrev(false)}
