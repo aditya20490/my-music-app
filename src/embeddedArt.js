@@ -1,5 +1,7 @@
 // Backup cover reader. Reads the picture stored inside MP3 (ID3), FLAC and M4A/MP4 files
 // using only expo-file-system, so covers still work even if the "song details" library is not in the build.
+import { NativeModules } from 'react-native';
+
 let FS = null;
 try {
   FS = require('expo-file-system/legacy');
@@ -14,7 +16,7 @@ if (FS && typeof FS.readAsStringAsync !== 'function') FS = null;
 
 export const EMBEDDED_ART_AVAILABLE = !!FS;
 
-const MAX_IMAGE = 10 * 1024 * 1024;
+const MAX_IMAGE = 64 * 1024 * 1024; // big covers are fine, they are never shrunk
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const LOOK = new Uint8Array(256).fill(255);
 for (let i = 0; i < B64.length; i++) LOOK[B64.charCodeAt(i)] = i;
@@ -244,4 +246,19 @@ export async function extractEmbeddedArt(song) {
   const out = dir + safe + '.' + cand.ext;
   await FS.writeAsStringAsync(out, b64, { encoding: 'base64' });
   return out;
+}
+
+// A version inside a .mka bundle: copies its own cover out of the bundle exactly as it is stored.
+// Returns a file:// uri, or null when that version has no cover.
+export async function extractMkaCover(song) {
+  const Mka = NativeModules ? NativeModules.Mka : null;
+  if (!FS || !Mka || typeof Mka.cover !== 'function' || !song || !song.mka) return null;
+  const dir = (FS.documentDirectory || FS.cacheDirectory) + 'covers/';
+  try {
+    await FS.makeDirectoryAsync(dir, { intermediates: true });
+  } catch (e) {}
+  const safe = String(song.id).replace(/[^A-Za-z0-9_-]/g, '_');
+  const base = String(dir + safe).replace(/^file:\/\//, '');
+  const out = await Mka.cover(song.mka.path, song.mka.track, base);
+  return out ? 'file://' + out : null;
 }
