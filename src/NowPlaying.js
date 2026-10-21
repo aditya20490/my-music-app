@@ -26,6 +26,7 @@ import { Art, SeekBar } from './ui';
 import { fetchLyrics, fetchDetails } from './library';
 import { formatTime, parseLyrics, lyricIndexAt } from './utils';
 import * as Engine from './audioEngine';
+import { GlowBackground, GLOW_DEFAULT, GLOW_STYLES, GLOW_COLORS, loadGlow, saveGlow } from './PlayerGlow';
 
 function buildInfoRows(song, d) {
   const rows = [];
@@ -149,6 +150,29 @@ export default function NowPlaying({
   const [eightPanel, setEightPanel] = useState(false); // the 8D settings sheet
   const [verPanel, setVerPanel] = useState(false); // the list of versions (only for .mka bundles)
   const [eset, setEset] = useState(() => Engine.getEightSettings());
+  const [glow, setGlow] = useState(GLOW_DEFAULT); // the glowing background (style, color, intensity, speed)
+  const [glowPanel, setGlowPanel] = useState(false);
+  const glowRef = useRef(GLOW_DEFAULT);
+
+  useEffect(() => {
+    let alive = true;
+    loadGlow().then((g) => {
+      if (alive) {
+        glowRef.current = g;
+        setGlow(g);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const changeGlow = (patch) => {
+    const n = { ...glowRef.current, ...patch };
+    glowRef.current = n;
+    setGlow(n);
+    saveGlow(n);
+  };
 
   const changeEight = (patch) => {
     setEset((old) => ({ ...old, ...patch }));
@@ -380,7 +404,7 @@ export default function NowPlaying({
   if (!song) return null;
 
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
-  const artSize = Math.max(150, Math.min(width - 72, 340, height - 560));
+  const artSize = Math.max(160, Math.min(width - 56, 380, height - 520));
   const infoRows = buildInfoRows(song, det.id === song.id ? det.data : null);
   const lyricsLoading = lyr.id !== songId || lyr.loading;
   const cardOpacity = tx.interpolate({ inputRange: [-width, 0, width], outputRange: [0.15, 1, 0.15], extrapolate: 'clamp' });
@@ -397,6 +421,7 @@ export default function NowPlaying({
       animationType="slide"
       onRequestClose={() => {
         if (verPanel) setVerPanel(false);
+        else if (glowPanel) setGlowPanel(false);
         else if (eightPanel) setEightPanel(false);
         else onClose();
       }}
@@ -407,18 +432,28 @@ export default function NowPlaying({
         colors={[t.accent + '66', t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
       >
+        {/* The glowing background: behind everything, never blocks touches */}
+        <GlowBackground glow={glow} playing={playing} visible={visible} colors={{ accent: t.accent, accent2: t.accent2 }} />
+
         <View style={s.fullTop}>
-          <TouchableOpacity onPress={onClose} style={s.fullTopBtn}>
-            <Ionicons name="chevron-down" size={30} color={t.text} />
-          </TouchableOpacity>
-          <Text style={s.fullTopTitle}>Now Playing</Text>
-          {onEdit ? (
-            <TouchableOpacity onPress={() => onEdit(song)} style={s.fullTopBtn}>
-              <Ionicons name="create-outline" size={24} color={t.text} />
+          <View style={{ width: 88, flexDirection: 'row' }}>
+            <TouchableOpacity onPress={onClose} style={s.fullTopBtn}>
+              <Ionicons name="chevron-down" size={30} color={t.text} />
             </TouchableOpacity>
-          ) : (
-            <View style={s.fullTopBtn} />
-          )}
+          </View>
+          <Text style={s.fullTopTitle}>Now Playing</Text>
+          <View style={{ width: 88, flexDirection: 'row', justifyContent: 'flex-end' }}>
+            <TouchableOpacity onPress={() => setGlowPanel(true)} style={s.fullTopBtn}>
+              <Ionicons name="color-wand-outline" size={24} color={glow.style !== 'off' ? t.accent : t.text} />
+            </TouchableOpacity>
+            {onEdit ? (
+              <TouchableOpacity onPress={() => onEdit(song)} style={s.fullTopBtn}>
+                <Ionicons name="create-outline" size={24} color={t.text} />
+              </TouchableOpacity>
+            ) : (
+              <View style={s.fullTopBtn} />
+            )}
+          </View>
         </View>
 
         {/* The card: cover / lyrics / info plus the song name. It slides when you swipe left or right. */}
@@ -532,7 +567,7 @@ export default function NowPlaying({
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ width: 44 }} />
               <View style={{ flex: 1 }}>
-                <Text style={s.fullTitle} numberOfLines={2}>
+                <Text style={s.fullTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
                   {song.title}
                 </Text>
                 <Text style={s.fullArtist} numberOfLines={1}>
@@ -729,6 +764,103 @@ export default function NowPlaying({
                     </TouchableOpacity>
                   );
                 })}
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
+
+        {/* Background glow settings sheet */}
+        {glowPanel ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => setGlowPanel(false)}
+              style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.3)' }}
+            />
+            <View
+              style={{
+                backgroundColor: t.card,
+                borderTopLeftRadius: 26,
+                borderTopRightRadius: 26,
+                paddingHorizontal: 20,
+                paddingTop: 14,
+                paddingBottom: insets.bottom + 18,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ color: t.text, fontSize: 18, fontWeight: '800' }}>Background glow</Text>
+                <TouchableOpacity onPress={() => setGlowPanel(false)} style={{ padding: 6 }}>
+                  <Ionicons name="close" size={24} color={t.muted} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={{ maxHeight: height * 0.7 }} showsVerticalScrollIndicator={false}>
+                <Text style={{ color: t.text, fontSize: 14, fontWeight: '700', marginTop: 14 }}>Style</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 8, gap: 8 }}>
+                  {GLOW_STYLES.map((g) => {
+                    const on = glow.style === g.key;
+                    return (
+                      <TouchableOpacity
+                        key={g.key}
+                        onPress={() => changeGlow({ style: g.key })}
+                        activeOpacity={0.8}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                          borderRadius: 14,
+                          borderWidth: 1,
+                          borderColor: on ? t.accent : t.track,
+                          backgroundColor: on ? t.accent : 'transparent',
+                        }}
+                      >
+                        <Ionicons name={g.icon} size={15} color={on ? t.onAccent : t.muted} />
+                        <Text style={{ marginLeft: 5, fontSize: 13, fontWeight: '800', color: on ? t.onAccent : t.muted }}>{g.label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <Text style={{ color: t.text, fontSize: 14, fontWeight: '700', marginTop: 16 }}>Color</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, gap: 12 }}>
+                  {GLOW_COLORS.map((c) => {
+                    const on = glow.color === c.key;
+                    return (
+                      <TouchableOpacity
+                        key={c.key}
+                        onPress={() => changeGlow({ color: c.key })}
+                        activeOpacity={0.8}
+                        style={{
+                          width: 38,
+                          height: 38,
+                          borderRadius: 19,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: c.swatch || t.accent,
+                          borderWidth: on ? 3 : 1,
+                          borderColor: on ? '#FFFFFF' : 'rgba(255,255,255,0.2)',
+                        }}
+                      >
+                        {c.key === 'theme' ? <Ionicons name="color-palette" size={18} color="#FFFFFF" /> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <EightSlider
+                  label="Intensity"
+                  value={glow.intensity}
+                  onChange={(v) => changeGlow({ intensity: v })}
+                  disabled={glow.style === 'off'}
+                />
+                <EightSlider
+                  label="Speed"
+                  value={glow.speed}
+                  onChange={(v) => changeGlow({ speed: v })}
+                  disabled={glow.style === 'off'}
+                  note="It moves while the song plays and calms down when you pause."
+                />
               </ScrollView>
             </View>
           </View>
