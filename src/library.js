@@ -1,7 +1,7 @@
 // Everything that talks to the phone: finding songs, reading song info, cover art, lyrics, saved settings.
 import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { cleanTitle } from './utils';
-import { extractEmbeddedArt, EMBEDDED_ART_AVAILABLE } from './embeddedArt';
+import { extractEmbeddedArt, extractMkaCover, EMBEDDED_ART_AVAILABLE } from './embeddedArt';
 import { readTagsJs, TAG_READER_AVAILABLE } from './tagReader';
 import { loadEdits, withEdit, getEditCover } from './edits';
 
@@ -239,39 +239,52 @@ function mkaFilePath(uri) {
   }
 }
 
-// Turns one .mka file into one song per version, so every version shows up in the normal song list.
-async function mkaVersions(a) {
-  const out = [];
-  if (!Mka || typeof Mka.list !== 'function') return out;
+// Turns one .mka file into ONE song for the library (the first version = the original).
+// Every version inside keeps its own title, artist, writer, lyrics and cover, and sits in song.versions.
+// The player's "Versions" button lists them. Older bundles without saved details still work (they only have names).
+async function mkaBundle(a) {
+  if (!Mka || typeof Mka.list !== 'function') return null;
   try {
-    const info = JSON.parse(await Mka.list(mkaFilePath(a.uri)));
+    const path = mkaFilePath(a.uri);
+    const info = JSON.parse(await Mka.list(path));
     const bundleTitle = str(info.title) || cleanTitle(a.filename);
     const tracks = info.tracks || [];
-    for (const tr of tracks) {
-      const name = str(tr.name) || 'Version ' + tr.number;
-      const title = bundleTitle + ' - ' + name;
-      out.push({
+    if (tracks.length === 0) return null;
+    const bundleId = 'mka_' + String(a.id) + '_' + tracks[0].number;
+    const versions = tracks.map((tr, i) => {
+      const label = str(tr.name) || (i === 0 ? 'Original' : 'Version ' + (i + 1));
+      const lyrics = typeof tr.lyrics === 'string' ? tr.lyrics : '';
+      const base = {
+        title: str(tr.title) || (i === 0 ? bundleTitle : bundleTitle + ' - ' + label),
+        artist: str(tr.artist),
+        albumArtist: str(tr.albumArtist),
+        album: str(tr.album) || bundleTitle,
+        genre: str(tr.genre),
+        year: num(tr.year),
+        track: 0,
+        disc: 0,
+        composer: str(tr.composer),
+      };
+      const dur = tr.durationMs > 0 ? tr.durationMs : info.durationMs || 0;
+      return withEdit({
         id: 'mka_' + String(a.id) + '_' + tr.number,
         uri: a.uri,
         filename: a.filename || '',
-        fileTitle: title,
-        title: title,
-        artist: '',
-        albumArtist: '',
-        album: bundleTitle,
-        genre: '',
-        year: 0,
-        track: tr.number,
-        disc: 0,
-        composer: '',
-        duration: (info.durationMs || 0) / 1000,
+        fileTitle: base.title,
+        ...base,
+        duration: dur / 1000,
         added: a.creationTime || a.modificationTime || 0,
         hasMeta: true,
-        mka: { path: mkaFilePath(a.uri), track: tr.number },
+        bundleId: bundleId,
+        versionLabel: label,
+        lyricsEdit: lyrics, // the lyrics saved inside the bundle (an empty text = this version has none)
+        mka: { path: path, track: tr.number, base: base, lyrics: lyrics, hasCover: !!tr.hasCover },
       });
-    }
-  } catch (e) {}
-  return out;
+    });
+    return { ...versions[0], versions: versions };
+  } catch (e) {
+    return null;
+  }
 }
 
 // ---------- Finding songs ----------
@@ -287,8 +300,8 @@ export async function scanSongs() {
     });
     for (const a of page.assets) {
       if (/\.mka$/i.test(a.filename || '')) {
-        const versions = await mkaVersions(a);
-        for (const v of versions) list.push(withEdit(v));
+        const bundle = await mkaBundle(a);
+        if (bundle) list.push(bundle);
         continue;
       }
       if (!(a.duration > 0) || a.duration >= MIN_SECONDS) {
@@ -368,7 +381,17 @@ function hasContent(rec) {
 
 // Puts the original details back on a song, then puts your own changes on top.
 export function refreshSong(song) {
-  if (song.mka) return song; // bundle versions keep the details stored inside the bundle
+  if (song.mka) {
+    // a bundle version: back to the details stored inside the bundle, then your own changes on top
+    const out = withEdit({
+      ...song,
+      ...song.mka.base,
+      edited: false,
+      coverKey: undefined,
+      lyricsEdit: song.mka.lyrics || '',
+    });
+    return song.versions ? { ...out, versions: song.versions } : out;
+  }
   const rec = metaCache[song.id];
   let base = { ...song, edited: false, coverKey: undefined, lyricsEdit: undefined };
   if (rec) {
@@ -506,7 +529,19 @@ async function runArtJob(id) {
   const song = artJobs.get(id);
   let result = null;
   let hadError = false;
-  if (song) {
+  if (song && song.mka) {
+    // a version inside a bundle: its own cover is stored in the bundle and copied out as it is (never shrunk)
+    try {
+      result = await extractMkaCover(song);
+      if (result) diag.artJs++;
+    } catch (e) {
+      hadError = true;
+      diag.lastArtError = 'bundle: ' + errText(e);
+    }
+    if (result) diag.artSaved++;
+    else if (hadError) diag.artFail++;
+    else diag.artNone++;
+  } else if (song) {
     // 1) the song details library
     if (Meta && typeof Meta.saveArtwork === 'function' && !skipLib.has(id)) {
       try {
@@ -564,10 +599,6 @@ function pumpArt() {
 
 // Asks for a song's cover. Calls cb(uri or null) when ready. Returns a function that cancels.
 export function loadArt(song, cb) {
-  if (song.mka) {
-    cb(null);
-    return () => {};
-  }
   const ec = getEditCover(song.id);
   if (ec !== undefined) {
     cb(ec);
@@ -577,7 +608,11 @@ export function loadArt(song, cb) {
     cb(artMap.get(song.id));
     return () => {};
   }
-  if ((!Meta || typeof Meta.saveArtwork !== 'function') && !EMBEDDED_ART_AVAILABLE) {
+  if (!song.mka && (!Meta || typeof Meta.saveArtwork !== 'function') && !EMBEDDED_ART_AVAILABLE) {
+    cb(null);
+    return () => {};
+  }
+  if (song.mka && !(song.mka.hasCover)) {
     cb(null);
     return () => {};
   }
@@ -608,7 +643,10 @@ export function loadArt(song, cb) {
 }
 
 // ---------- Lyrics and details of one song ----------
+const isMkaUri = (u) => /\.mka(\?|$)/i.test(String(u || ''));
+
 export async function fetchLyrics(uri) {
+  if (isMkaUri(uri)) return { text: '', error: '' }; // bundle lyrics are already on the song (lyricsEdit)
   if (!Meta || typeof Meta.getLyric !== 'function') {
     return { text: '', error: 'Lyrics reader is not part of this build.' };
   }
@@ -621,6 +659,7 @@ export async function fetchLyrics(uri) {
 }
 
 export async function fetchDetails(uri) {
+  if (isMkaUri(uri)) return null;
   if (!Meta || typeof Meta.getMetadata !== 'function') return null;
   try {
     return await Meta.getMetadata(uri, [
