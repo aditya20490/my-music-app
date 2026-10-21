@@ -133,6 +133,8 @@ export default function NowPlaying({
   onEdit,
   volume,
   onVolume,
+  versions,
+  onPickVersion,
 }) {
   const { t, s } = useTheme();
   const insets = useSafeAreaInsets();
@@ -145,6 +147,7 @@ export default function NowPlaying({
   const [volShown, setVolShown] = useState(false);
   const [eightD, setEightD] = useState(() => Engine.player.isEightD());
   const [eightPanel, setEightPanel] = useState(false); // the 8D settings sheet
+  const [verPanel, setVerPanel] = useState(false); // the list of versions (only for .mka bundles)
   const [eset, setEset] = useState(() => Engine.getEightSettings());
 
   const changeEight = (patch) => {
@@ -393,7 +396,8 @@ export default function NowPlaying({
       visible={visible}
       animationType="slide"
       onRequestClose={() => {
-        if (eightPanel) setEightPanel(false);
+        if (verPanel) setVerPanel(false);
+        else if (eightPanel) setEightPanel(false);
         else onClose();
       }}
       statusBarTranslucent
@@ -584,6 +588,29 @@ export default function NowPlaying({
                 </TouchableOpacity>
               ) : null}
             </View>
+            {versions && versions.length > 1 ? (
+              <View style={{ alignItems: 'center', marginTop: 10 }}>
+                <TouchableOpacity
+                  onPress={() => setVerPanel(true)}
+                  activeOpacity={0.8}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingHorizontal: 14,
+                    paddingVertical: 7,
+                    borderRadius: 18,
+                    borderWidth: 1.5,
+                    borderColor: t.accent,
+                  }}
+                >
+                  <Ionicons name="layers" size={16} color={t.accent} />
+                  <Text style={{ marginLeft: 6, fontSize: 13, fontWeight: '800', color: t.accent }} numberOfLines={1}>
+                    {'Versions · ' + versions.length + (song.versionLabel ? '  (' + song.versionLabel + ')' : '')}
+                  </Text>
+                  <Ionicons name="chevron-up" size={15} color={t.accent} style={{ marginLeft: 6 }} />
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
         </Animated.View>
 
@@ -637,6 +664,75 @@ export default function NowPlaying({
             );
           })}
         </View>
+
+        {/* Versions sheet: every version in the bundle, each with its own cover, title, artist and writer */}
+        {verPanel && versions ? (
+          <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, justifyContent: 'flex-end' }}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => setVerPanel(false)}
+              style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.45)' }}
+            />
+            <View
+              style={{
+                backgroundColor: t.card,
+                borderTopLeftRadius: 26,
+                borderTopRightRadius: 26,
+                paddingHorizontal: 16,
+                paddingTop: 14,
+                paddingBottom: insets.bottom + 18,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={{ color: t.text, fontSize: 18, fontWeight: '800' }}>Versions</Text>
+                <TouchableOpacity onPress={() => setVerPanel(false)} style={{ padding: 6 }}>
+                  <Ionicons name="close" size={24} color={t.muted} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={{ maxHeight: height * 0.65, marginTop: 6 }} showsVerticalScrollIndicator={false}>
+                {versions.map((v) => {
+                  const on = v.id === song.id;
+                  const sub = [v.artist, v.composer ? 'Writer: ' + v.composer : ''].filter(Boolean).join('  •  ');
+                  return (
+                    <TouchableOpacity
+                      key={v.id}
+                      activeOpacity={0.7}
+                      onPress={() => {
+                        setVerPanel(false);
+                        if (!on && onPickVersion) onPickVersion(v);
+                      }}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        marginTop: 10,
+                        padding: 10,
+                        borderRadius: 16,
+                        borderWidth: 1.5,
+                        borderColor: on ? t.accent : t.track,
+                      }}
+                    >
+                      <Art song={v} size={56} radius={12} />
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        <Text style={{ color: t.accent, fontSize: 11, fontWeight: '800' }} numberOfLines={1}>
+                          {String(v.versionLabel || 'Version').toUpperCase()}
+                        </Text>
+                        <Text style={{ color: t.text, fontSize: 15, fontWeight: '700', marginTop: 1 }} numberOfLines={1}>
+                          {v.title}
+                        </Text>
+                        {sub ? (
+                          <Text style={{ color: t.muted, fontSize: 12, marginTop: 1 }} numberOfLines={1}>
+                            {sub}
+                          </Text>
+                        ) : null}
+                      </View>
+                      {on ? <Ionicons name="volume-high" size={20} color={t.accent} /> : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </View>
+        ) : null}
 
         {/* 8D settings sheet */}
         {eightPanel ? (
