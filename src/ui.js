@@ -126,6 +126,22 @@ export const SongRow = React.memo(function SongRow({ song, index, active, onPres
           {sub}
         </Text>
       </View>
+      {song.versions && song.versions.length > 1 ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginRight: 8,
+            paddingHorizontal: 6,
+            paddingVertical: 2,
+            borderRadius: 8,
+            backgroundColor: t.track,
+          }}
+        >
+          <Ionicons name="layers" size={12} color={t.accent} />
+          <Text style={{ color: t.accent, fontSize: 11, fontWeight: '800', marginLeft: 3 }}>{song.versions.length}</Text>
+        </View>
+      ) : null}
       <Text style={s.rowTime}>{formatTime(song.duration)}</Text>
       {onFav ? (
         <TouchableOpacity
@@ -160,6 +176,24 @@ export const SongTile = React.memo(function SongTile({ song, index, active, onPr
       <View style={s.badge}>
         <Text style={s.badgeText}>{formatTime(song.duration)}</Text>
       </View>
+      {song.versions && song.versions.length > 1 ? (
+        <View
+          style={{
+            position: 'absolute',
+            top: 6,
+            left: 6,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 6,
+            paddingVertical: 2,
+            borderRadius: 8,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+          }}
+        >
+          <Ionicons name="layers" size={12} color="#fff" />
+          <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800', marginLeft: 3 }}>{song.versions.length}</Text>
+        </View>
+      ) : null}
       {active ? <View pointerEvents="none" style={[s.tileActive, { borderColor: t.accent }]} /> : null}
     </TouchableOpacity>
   );
