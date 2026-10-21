@@ -141,14 +141,41 @@ async function eightStart(positionSec) {
   }
 }
 
+// ---------- MKA bundles ----------
+// A version inside a .mka bundle is first copied out (no re-encoding) into its own small file, then played like any song.
+const MkaNative = NativeModules ? NativeModules.Mka : null;
+let FS = null;
+try {
+  FS = require('expo-file-system/legacy');
+} catch (e) {
+  try {
+    FS = require('expo-file-system');
+  } catch (e2) {
+    FS = null;
+  }
+}
+
+async function resolveMka(song) {
+  if (!MkaNative || !FS || !FS.cacheDirectory) throw new Error('Bundles need the newest build of the app.');
+  const dir = String(FS.cacheDirectory).replace(/^file:\/\//, '');
+  const out = dir + 'play_' + String(song.id).replace(/[^A-Za-z0-9_-]/g, '_') + '.mka';
+  const p = await MkaNative.extract(song.mka.path, song.mka.track, out);
+  return 'file://' + p;
+}
+
 let loadId = 0;
 
 export const player = {
   // Start a song. meta = { title, artist, album }
-  async load(song, meta, volume) {
+  async load(songIn, meta, volume) {
     const my = ++loadId;
     await setupAudio();
     if (my !== loadId) return;
+    let song = songIn;
+    if (songIn.mka) {
+      song = { ...songIn, uri: await resolveMka(songIn) };
+      if (my !== loadId) return;
+    }
     await TrackPlayer.reset();
     if (my !== loadId) return;
     await TrackPlayer.add({
