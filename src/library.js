@@ -1,5 +1,5 @@
 // Everything that talks to the phone: finding songs, reading song info, cover art, lyrics, saved settings.
-import { Platform, PermissionsAndroid } from 'react-native';
+import { Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { cleanTitle } from './utils';
 import { extractEmbeddedArt, EMBEDDED_ART_AVAILABLE } from './embeddedArt';
 import { readTagsJs, TAG_READER_AVAILABLE } from './tagReader';
@@ -227,6 +227,53 @@ function applyRecord(song, rec) {
   };
 }
 
+// ---------- MKA bundles (one file holding an original song and its remixes / edits) ----------
+const Mka = NativeModules ? NativeModules.Mka : null;
+
+function mkaFilePath(uri) {
+  const p = String(uri).replace(/^file:\/\//, '');
+  try {
+    return decodeURI(p);
+  } catch (e) {
+    return p;
+  }
+}
+
+// Turns one .mka file into one song per version, so every version shows up in the normal song list.
+async function mkaVersions(a) {
+  const out = [];
+  if (!Mka || typeof Mka.list !== 'function') return out;
+  try {
+    const info = JSON.parse(await Mka.list(mkaFilePath(a.uri)));
+    const bundleTitle = str(info.title) || cleanTitle(a.filename);
+    const tracks = info.tracks || [];
+    for (const tr of tracks) {
+      const name = str(tr.name) || 'Version ' + tr.number;
+      const title = bundleTitle + ' - ' + name;
+      out.push({
+        id: 'mka_' + String(a.id) + '_' + tr.number,
+        uri: a.uri,
+        filename: a.filename || '',
+        fileTitle: title,
+        title: title,
+        artist: '',
+        albumArtist: '',
+        album: bundleTitle,
+        genre: '',
+        year: 0,
+        track: tr.number,
+        disc: 0,
+        composer: '',
+        duration: (info.durationMs || 0) / 1000,
+        added: a.creationTime || a.modificationTime || 0,
+        hasMeta: true,
+        mka: { path: mkaFilePath(a.uri), track: tr.number },
+      });
+    }
+  } catch (e) {}
+  return out;
+}
+
 // ---------- Finding songs ----------
 export async function scanSongs() {
   const list = [];
@@ -239,6 +286,11 @@ export async function scanSongs() {
       after: after,
     });
     for (const a of page.assets) {
+      if (/\.mka$/i.test(a.filename || '')) {
+        const versions = await mkaVersions(a);
+        for (const v of versions) list.push(withEdit(v));
+        continue;
+      }
       if (!(a.duration > 0) || a.duration >= MIN_SECONDS) {
         const fileTitle = cleanTitle(a.filename);
         const base = {
@@ -316,6 +368,7 @@ function hasContent(rec) {
 
 // Puts the original details back on a song, then puts your own changes on top.
 export function refreshSong(song) {
+  if (song.mka) return song; // bundle versions keep the details stored inside the bundle
   const rec = metaCache[song.id];
   let base = { ...song, edited: false, coverKey: undefined, lyricsEdit: undefined };
   if (rec) {
@@ -511,6 +564,10 @@ function pumpArt() {
 
 // Asks for a song's cover. Calls cb(uri or null) when ready. Returns a function that cancels.
 export function loadArt(song, cb) {
+  if (song.mka) {
+    cb(null);
+    return () => {};
+  }
   const ec = getEditCover(song.id);
   if (ec !== undefined) {
     cb(ec);
