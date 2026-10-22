@@ -443,7 +443,16 @@ export default function NowPlaying({
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
       >
         {/* The glowing background: behind everything, never blocks touches */}
-        <GlowBackground glow={glow} playing={playing} visible={visible} colors={{ accent: t.accent, accent2: t.accent2 }} />
+        <GlowBackground
+          glow={glow}
+          playing={playing}
+          visible={visible}
+          colors={{ accent: t.accent, accent2: t.accent2, bg: t.bg }}
+          song={song}
+          covers={covers}
+          pinned={pinnedCover}
+          currentTime={currentTime}
+        />
 
         <View style={s.fullTop}>
           <View style={{ width: 88, flexDirection: 'row' }}>
@@ -454,7 +463,20 @@ export default function NowPlaying({
           <Text style={s.fullTopTitle}>Now Playing</Text>
           <View style={{ width: 88, flexDirection: 'row', justifyContent: 'flex-end' }}>
             <TouchableOpacity onPress={() => setGlowPanel(true)} style={s.fullTopBtn}>
-              <Ionicons name="color-wand-outline" size={24} color={glow.style !== 'off' ? t.accent : t.text} />
+              <View
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 19,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: t.accent,
+                  borderWidth: 2,
+                  borderColor: 'rgba(255,255,255,0.85)',
+                }}
+              >
+                <Ionicons name="color-wand" size={20} color={t.onAccent} />
+              </View>
             </TouchableOpacity>
             {onEdit ? (
               <TouchableOpacity onPress={() => onEdit(song)} style={s.fullTopBtn}>
@@ -868,23 +890,26 @@ export default function NowPlaying({
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 10, gap: 12 }}>
                   {GLOW_COLORS.map((c) => {
                     const on = glow.color === c.key;
+                    const wide = c.key === 'cover';
                     return (
                       <TouchableOpacity
                         key={c.key}
                         onPress={() => changeGlow({ color: c.key })}
                         activeOpacity={0.8}
                         style={{
-                          width: 38,
+                          width: wide ? 150 : 38,
                           height: 38,
                           borderRadius: 19,
+                          flexDirection: 'row',
                           alignItems: 'center',
                           justifyContent: 'center',
                           backgroundColor: c.swatch || t.accent,
                           borderWidth: on ? 3 : 1,
-                          borderColor: on ? '#FFFFFF' : 'rgba(255,255,255,0.2)',
+                          borderColor: on ? '#FFFFFF' : 'rgba(255,255,255,0.25)',
                         }}
                       >
-                        {c.key === 'theme' ? <Ionicons name="color-palette" size={18} color="#FFFFFF" /> : null}
+                        {c.icon ? <Ionicons name={c.icon} size={18} color="#FFFFFF" /> : null}
+                        {wide ? <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 13, marginLeft: 6 }}>{c.label}</Text> : null}
                       </TouchableOpacity>
                     );
                   })}
