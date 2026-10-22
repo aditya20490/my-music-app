@@ -1,11 +1,14 @@
 // The animated background of the full-screen player.
-// 13 styles, 15 colors, and a "Cover colors" mode that takes the colors from the cover that is showing.
+// Five premium styles built from soft layers of light (aurora curtains, liquid light, nebula clouds, silk ribbons, embers).
+// The soft textures are made in code the first time they are needed, so no image files are needed.
+// Only transforms and opacity move, so it all runs on the phone's graphics side (smooth and light on battery).
 // It sits behind everything (buttons and cover stay in front) and never blocks touches.
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Animated, Easing, StyleSheet, NativeModules, useWindowDimensions } from 'react-native';
+import { View, Animated, Easing, Image, StyleSheet, useWindowDimensions } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getCachedArt, loadArt } from './library';
 import { COVER_SECONDS } from './CoverShow';
+import { getCoverColors } from './coverColors';
 
 let AS = null;
 try {
@@ -15,27 +18,35 @@ try {
   AS = null;
 }
 
-const KEY = 'mm_glow_v1';
+const KEY = 'mm_glow_v2';
 const TAU = Math.PI * 2;
 const memo = React.memo;
+const FILL = StyleSheet.absoluteFill;
 
-export const GLOW_DEFAULT = { style: 'fire', color: 'blue', intensity: 0.75, speed: 0.5 };
+export const GLOW_DEFAULT = { style: 'aurora', color: 'cover', intensity: 0.8, speed: 0.4 };
 
 export const GLOW_STYLES = [
   { key: 'off', label: 'Off', icon: 'moon' },
-  { key: 'fire', label: 'Fire', icon: 'flame' },
-  { key: 'aura', label: 'Aura', icon: 'color-filter' },
-  { key: 'sparks', label: 'Sparkles', icon: 'sparkles' },
-  { key: 'pulse', label: 'Pulse', icon: 'radio-button-on' },
   { key: 'aurora', label: 'Aurora', icon: 'cloudy-night' },
-  { key: 'waves', label: 'Waves', icon: 'water' },
-  { key: 'bokeh', label: 'Bokeh', icon: 'ellipse' },
-  { key: 'galaxy', label: 'Galaxy', icon: 'planet' },
-  { key: 'lava', label: 'Lava', icon: 'flask' },
-  { key: 'bars', label: 'Equalizer', icon: 'stats-chart' },
-  { key: 'rain', label: 'Neon rain', icon: 'rainy' },
-  { key: 'fireflies', label: 'Fireflies', icon: 'bulb' },
+  { key: 'liquid', label: 'Liquid light', icon: 'water' },
+  { key: 'nebula', label: 'Nebula', icon: 'planet' },
+  { key: 'silk', label: 'Silk', icon: 'layers' },
+  { key: 'fire', label: 'Embers', icon: 'flame' },
 ];
+
+// Styles saved by older versions now point to the closest new one
+const ALIAS = {
+  aura: 'liquid',
+  lava: 'liquid',
+  bokeh: 'liquid',
+  sparks: 'nebula',
+  galaxy: 'nebula',
+  fireflies: 'nebula',
+  pulse: 'silk',
+  waves: 'silk',
+  bars: 'aurora',
+  rain: 'aurora',
+};
 
 // [deep, middle, bright]
 const PALETTES = {
@@ -73,9 +84,18 @@ export const GLOW_COLORS = [
 ];
 
 export async function loadGlow() {
+  setTimeout(() => {
+    try {
+      textures(); // prepare the soft textures early, so the player opens without a hiccup
+    } catch (e) {}
+  }, 600);
   try {
     const raw = AS ? await AS.getItem(KEY) : null;
-    if (raw) return { ...GLOW_DEFAULT, ...JSON.parse(raw) };
+    if (raw) {
+      const g = { ...GLOW_DEFAULT, ...JSON.parse(raw) };
+      if (ALIAS[g.style]) g.style = ALIAS[g.style];
+      return g;
+    }
   } catch (e) {}
   return GLOW_DEFAULT;
 }
@@ -102,11 +122,6 @@ function hexToRgb(h) {
 function toHex(r, g, b) {
   const f = (x) => ('0' + Math.max(0, Math.min(255, Math.round(x))).toString(16)).slice(-2);
   return '#' + f(r) + f(g) + f(b);
-}
-
-function rgba(hex, a) {
-  const c = hexToRgb(hex);
-  return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')';
 }
 
 function mix(a, b, t) {
@@ -143,8 +158,8 @@ function hsvToHex(h, s, v) {
   return toHex(m[0] * 255, m[1] * 255, m[2] * 255);
 }
 
-// The colors of the cover: pal = [deep, middle, bright] for the effects, base = [top, middle, bottom] for the background.
-// The background goes from the brightest shade at the top to almost black at the bottom.
+// pal = [deep, middle, bright] for the effects, base = [top, middle, bottom] for the background.
+// With the cover colors the background goes from the brightest shade at the top to almost black at the bottom.
 function coverPal(main, second) {
   const c = hexToRgb(main);
   const hsv = rgbToHsv(c[0], c[1], c[2]);
@@ -179,23 +194,7 @@ function palette(key, colors, cover) {
   return { pal: p, base: [mix(bg, p[1], 0.5), mix(bg, p[0], 0.2), bg] };
 }
 
-// ---------- reading the colors of the cover that is showing ----------
-const CoverColor = NativeModules.CoverColor;
-const colorCache = new Map();
-
-function fetchColors(uri) {
-  if (colorCache.has(uri)) return Promise.resolve(colorCache.get(uri));
-  if (!CoverColor) return Promise.resolve(null);
-  return CoverColor.getColors(uri)
-    .then((r) => {
-      const v = r && r.length ? { main: r[0], second: r[1] || r[0] } : null;
-      colorCache.set(uri, v);
-      return v;
-    })
-    .catch(() => null);
-}
-
-// Follows the cover on screen: the single cover of the song, or the one the cover show is on right now
+// Follows the cover on screen: the song's single cover, or the cover the cover show is on right now
 function useCoverColors(enabled, song, covers, pinned, currentTime) {
   const n = covers ? covers.length : 0;
   const auto = n > 0 ? Math.floor(Math.max(0, currentTime || 0) / COVER_SECONDS) % n : 0;
@@ -231,7 +230,7 @@ function useCoverColors(enabled, song, covers, pinned, currentTime) {
       return undefined;
     }
     let alive = true;
-    fetchColors(uri).then((v) => {
+    getCoverColors(uri).then((v) => {
       if (alive) setColors(v);
     });
     return () => {
@@ -241,8 +240,206 @@ function useCoverColors(enabled, song, covers, pinned, currentTime) {
   return colors;
 }
 
+// ---------- soft textures, drawn in code once ----------
+const CRC = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf, start, end) {
+  let c = 0xffffffff;
+  for (let i = start; i < end; i++) c = CRC[(c ^ buf[i]) & 255] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function adler32(buf) {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < buf.length; i++) {
+    a = (a + buf[i]) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+const B64C = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function b64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i] << 16) | ((bytes[i + 1] || 0) << 8) | (bytes[i + 2] || 0);
+    s += B64C[(n >> 18) & 63] + B64C[(n >> 12) & 63] + (i + 1 < bytes.length ? B64C[(n >> 6) & 63] : '=') + (i + 2 < bytes.length ? B64C[n & 63] : '=');
+  }
+  return s;
+}
+
+function makePng(w, h, px) {
+  const rowLen = w * 4 + 1;
+  const raw = new Uint8Array(rowLen * h);
+  for (let y = 0; y < h; y++) raw.set(px.subarray(y * w * 4, (y + 1) * w * 4), y * rowLen + 1);
+  const blocks = Math.ceil(raw.length / 65535);
+  const z = new Uint8Array(2 + raw.length + blocks * 5 + 4);
+  let o = 0;
+  z[o++] = 0x78;
+  z[o++] = 0x01;
+  for (let i = 0; i < blocks; i++) {
+    const start = i * 65535;
+    const len = Math.min(65535, raw.length - start);
+    z[o++] = i === blocks - 1 ? 1 : 0;
+    z[o++] = len & 255;
+    z[o++] = len >> 8;
+    z[o++] = ~len & 255;
+    z[o++] = (~len >> 8) & 255;
+    z.set(raw.subarray(start, start + len), o);
+    o += len;
+  }
+  const ad = adler32(raw);
+  z[o++] = ad >>> 24;
+  z[o++] = (ad >>> 16) & 255;
+  z[o++] = (ad >>> 8) & 255;
+  z[o++] = ad & 255;
+
+  const chunk = (type, data) => {
+    const n = data.length;
+    const out = new Uint8Array(12 + n);
+    out[0] = (n >>> 24) & 255;
+    out[1] = (n >>> 16) & 255;
+    out[2] = (n >>> 8) & 255;
+    out[3] = n & 255;
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    const c = crc32(out, 4, 8 + n);
+    out[8 + n] = (c >>> 24) & 255;
+    out[9 + n] = (c >>> 16) & 255;
+    out[10 + n] = (c >>> 8) & 255;
+    out[11 + n] = c & 255;
+    return out;
+  };
+  const ihdr = new Uint8Array(13);
+  ihdr[2] = (w >> 8) & 255;
+  ihdr[3] = w & 255;
+  ihdr[6] = (h >> 8) & 255;
+  ihdr[7] = h & 255;
+  ihdr[8] = 8;
+  ihdr[9] = 6;
+  const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', z.subarray(0, o)), chunk('IEND', new Uint8Array(0))];
+  let total = 0;
+  parts.forEach((p) => {
+    total += p.length;
+  });
+  const file = new Uint8Array(total);
+  let at = 0;
+  parts.forEach((p) => {
+    file.set(p, at);
+    at += p.length;
+  });
+  return b64(file);
+}
+
+// A white picture whose see-through-ness is f(x, y) (x and y go from 0 to 1). It gets its color from tintColor.
+function tex(w, h, f) {
+  const px = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const a = Math.max(0, Math.min(1, f(x / (w - 1), y / (h - 1))));
+      const i = (y * w + x) * 4;
+      px[i] = 255;
+      px[i + 1] = 255;
+      px[i + 2] = 255;
+      px[i + 3] = Math.round(a * 255);
+    }
+  }
+  return 'data:image/png;base64,' + makePng(w, h, px);
+}
+
+function hash(x, y, s) {
+  const n = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function vnoise(x, y, s) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  const a = hash(xi, yi, s);
+  const b = hash(xi + 1, yi, s);
+  const c = hash(xi, yi + 1, s);
+  const d = hash(xi + 1, yi + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+function fbm(x, y, s, oct) {
+  let v = 0;
+  let amp = 0.5;
+  let f = 1;
+  let sum = 0;
+  for (let i = 0; i < oct; i++) {
+    v += amp * vnoise(x * f, y * f, s + i);
+    sum += amp;
+    amp *= 0.5;
+    f *= 2;
+  }
+  return v / sum;
+}
+
+function smooth(a, b, x) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
+let TX = null;
+function textures() {
+  if (TX) return TX;
+  TX = {
+    // a round soft light
+    blob: tex(64, 64, (x, y) => {
+      const r = Math.hypot(x - 0.5, y - 0.5) * 2;
+      return r >= 1 ? 0 : Math.pow(1 - smooth(0, 1, r), 1.3);
+    }),
+    // a small glowing point
+    dot: tex(32, 32, (x, y) => {
+      const r = Math.hypot(x - 0.5, y - 0.5) * 2;
+      return r >= 1 ? 0 : Math.pow(1 - smooth(0, 1, r), 2.6);
+    }),
+    // a soft irregular cloud
+    cloud: tex(96, 96, (x, y) => {
+      const r = Math.hypot(x - 0.5, y - 0.5) * 2;
+      const n = fbm(x * 3.2, y * 3.2, 7, 4);
+      return smooth(0.32, 0.78, n) * (1 - smooth(0.55, 1, r)) * 0.95;
+    }),
+    // an aurora curtain: fine rays, bright low edge, long soft fade upward
+    curtain: tex(64, 160, (x, y) => {
+      const u = 1 - y;
+      const rays = vnoise(x * 14, 0.5, 3) * 0.6 + vnoise(x * 31, 1.5, 5) * 0.4;
+      const mask = smooth(0, 0.22, x) * smooth(1, 0.78, x);
+      const uu = u * (1.35 - 0.8 * rays);
+      return smooth(0, 0.12, u) * Math.pow(Math.max(0, 1 - uu), 1.7) * (0.3 + 0.7 * rays) * mask;
+    }),
+    // a soft ribbon of light
+    band: tex(32, 128, (x, y) => {
+      const g = Math.exp(-Math.pow((x - 0.5) * 4.4, 2));
+      return g * smooth(0, 0.2, y) * smooth(1, 0.8, y) * (0.75 + 0.25 * vnoise(x * 6, y * 3, 9));
+    }),
+    // a soft flame
+    flame: tex(48, 128, (x, y) => {
+      const hw = 0.5 * Math.pow(Math.sin((Math.min(1, y * 1.1) * Math.PI) / 2), 0.9);
+      const d = Math.abs(x - 0.5) / (hw + 0.0001);
+      if (d >= 1) return 0;
+      return Math.pow(1 - d * d, 1.6) * smooth(0, 0.12, y) * (0.55 + 0.45 * y) * (0.8 + 0.4 * (vnoise(x * 5, y * 9, 2) - 0.5));
+    }),
+  };
+  return TX;
+}
+
 // ---------- animation helpers ----------
-// One clock (0 -> 1, over and over) drives everything. Each thing picks its own speed and phase from it.
+// One clock (0 -> 1, over and over) drives everything. Each layer picks its own speed (whole cycles) and phase from it.
 function useClock(run, dur) {
   const v = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -261,17 +458,18 @@ function rnd(i, k) {
 
 // A smooth wave that repeats "cycles" times per clock round
 function wave(p, base, amp, cycles, phase, unit) {
+  const N = Math.min(120, Math.max(24, Math.ceil(cycles * 14)));
   const inp = [];
   const out = [];
-  for (let i = 0; i <= 16; i++) {
-    const v = base + amp * Math.sin(TAU * (cycles * (i / 16) + phase));
-    inp.push(i / 16);
+  for (let i = 0; i <= N; i++) {
+    const v = base + amp * Math.sin(TAU * (cycles * (i / N) + phase));
+    inp.push(i / N);
     out.push(unit ? v + unit : v);
   }
   return p.interpolate({ inputRange: inp, outputRange: out });
 }
 
-// Something that starts over k times per round (rising sparks, falling rain...). f(u) is its look from u = 0 to 1.
+// Something that starts over k times per round (rising sparks). f(u) is its look from u = 0 to 1.
 function saw(p, k, ph, f) {
   const inp = [];
   const out = [];
@@ -308,592 +506,234 @@ function saw(p, k, ph, f) {
   return p.interpolate({ inputRange: inp, outputRange: out });
 }
 
-const fadeInOut = (u) => (u < 0.12 ? u / 0.12 : u > 0.7 ? (1 - u) / 0.3 : 1);
+const AImg = Animated.createAnimatedComponent(Image);
 
-// A soft round glow: several see-through circles on top of each other
-const LAYERS = [1, 0.82, 0.65, 0.5, 0.36, 0.24];
-function Soft({ size, color, alpha }) {
+function Sprite({ src, color, x, y, w, h, opacity, transform }) {
   return (
-    <View style={{ width: size, height: size }} pointerEvents="none">
-      {LAYERS.map((k, i) => (
-        <View
-          key={i}
-          style={{
-            position: 'absolute',
-            width: size * k,
-            height: size * k,
-            left: (size - size * k) / 2,
-            top: (size - size * k) / 2,
-            borderRadius: (size * k) / 2,
-            backgroundColor: color,
-            opacity: alpha * (0.12 + i * 0.05),
-          }}
-        />
-      ))}
-    </View>
-  );
-}
-
-function Base({ pal, height, a }) {
-  const m = a || 1;
-  return (
-    <LinearGradient
+    <AImg
       pointerEvents="none"
-      colors={[rgba(pal[0], 0), rgba(pal[0], 0.3 * m), rgba(pal[1], 0.6 * m)]}
-      style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: height * 0.42 }}
+      fadeDuration={0}
+      resizeMode="stretch"
+      source={{ uri: src }}
+      style={{ position: 'absolute', left: x, top: y, width: w, height: h, tintColor: color, opacity: opacity === undefined ? 1 : opacity, transform }}
     />
   );
 }
 
-// Little glowing dots floating up (used by Fire and Sparkles)
-function embers({ pal, clock, width, height, count, rise, size }) {
-  return Array.from({ length: count }, (_, i) => {
-    const k = 2 + Math.floor(rnd(i, 1) * 5);
-    const ph = rnd(i, 2);
-    const sz = (size || 3) * (0.6 + rnd(i, 3) * 1.1);
-    const sway = 10 + rnd(i, 4) * 24;
-    return (
-      <Animated.View
-        key={'e' + i}
-        pointerEvents="none"
-        style={{
-          position: 'absolute',
-          left: rnd(i, 5) * width,
-          bottom: height * 0.02,
-          opacity: saw(clock, k, ph, fadeInOut),
-          transform: [
-            { translateX: saw(clock, k, ph, (u) => Math.sin(u * TAU * 2) * sway) },
-            { translateY: saw(clock, k, ph, (u) => -u * rise) },
-          ],
-        }}
-      >
-        <View style={{ position: 'absolute', left: -sz * 1.5, top: -sz * 1.5, width: sz * 3, height: sz * 3, borderRadius: sz * 1.5, backgroundColor: pal[1], opacity: 0.25 }} />
-        <View style={{ width: sz, height: sz, borderRadius: sz / 2, backgroundColor: pal[2] }} />
-      </Animated.View>
-    );
-  });
-}
-
-const FILL = StyleSheet.absoluteFill;
-
-// ---------- Fire: three rows of real flame shapes (teardrops with a hot core), flickering and leaning, plus embers ----------
-function Flame({ x, w, h, base, pal, a, cols, clock, seed }) {
-  const S = w / 1.4142; // the flame is a square with one pointed corner, turned 45 degrees and stretched tall
-  const sy = h / w;
-  const k1 = 7 + Math.floor(rnd(seed, 4) * 6);
-  const k2 = 2 + Math.floor(rnd(seed, 5) * 3);
-  const ph = rnd(seed, 6);
-  const corner = (z) => ({ width: z, height: z, borderRadius: z / 2, borderTopLeftRadius: 0 });
+// ---------- Aurora: slow curtains of light with fine rays ----------
+const Aurora = memo(function Aurora({ pal, clock, width, height }) {
+  const T = textures();
+  const stand = height * 0.72;
+  const cur = [
+    { x: -0.3, w: 1.25, c: 1, k: 1, ph: 0.0, o: 0.75 },
+    { x: 0.05, w: 1.0, c: 2, k: 2, ph: 0.3, o: 0.6 },
+    { x: 0.3, w: 1.2, c: 0, k: 1, ph: 0.55, o: 0.8 },
+    { x: -0.15, w: 0.9, c: 2, k: 2, ph: 0.8, o: 0.5 },
+  ];
   return (
-    <Animated.View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: x - S / 2,
-        bottom: base + h * 0.5 - S / 2,
-        width: S,
-        height: S,
-        opacity: wave(clock, 0.88, 0.12, k1 + 1, ph + 0.6),
-        transform: [
-          { translateX: wave(clock, 0, w * 0.1, k2, ph) },
-          { rotate: wave(clock, 0, 4, k2 + 1, ph + 0.25, 'deg') },
-          { scaleX: wave(clock, 1, 0.14, k1 - 2, ph) },
-          { scaleY: wave(clock, sy, sy * 0.2, k1, ph + 0.3) },
-          { rotate: '45deg' },
-        ],
-      }}
-    >
-      <View style={[corner(S * 1.2), { position: 'absolute', left: -S * 0.1, top: -S * 0.1, backgroundColor: pal[cols[0]], opacity: a * 0.3 }]} />
-      <View style={[corner(S), { backgroundColor: pal[cols[0]], opacity: a }]} />
-      <View style={[corner(S * 0.68), { position: 'absolute', right: S * 0.1, bottom: S * 0.1, backgroundColor: pal[cols[1]], opacity: 0.85 }]} />
-      <View style={[corner(S * 0.36), { position: 'absolute', right: S * 0.2, bottom: S * 0.2, backgroundColor: pal[cols[2]], opacity: 0.95 }]} />
-    </Animated.View>
+    <View style={FILL} pointerEvents="none">
+      <Sprite src={T.blob} color={pal[0]} x={-width * 0.4} y={stand - height * 0.2} w={width * 1.8} h={height * 0.5} opacity={wave(clock, 0.6, 0.15, 1, 0)} transform={[{ translateX: wave(clock, 0, width * 0.12, 1, 0.2) }]} />
+      {cur.map((c, i) => (
+        <Sprite
+          key={i}
+          src={T.curtain}
+          color={pal[c.c]}
+          x={c.x * width}
+          y={stand - height * 0.8}
+          w={width * c.w}
+          h={height * 0.8}
+          opacity={wave(clock, c.o, 0.28, 2, c.ph)}
+          transform={[
+            { translateX: wave(clock, 0, width * 0.14, c.k, c.ph) },
+            { rotate: wave(clock, 0, 3, c.k, c.ph + 0.25, 'deg') },
+            { scaleX: wave(clock, 1, 0.16, 2, c.ph) },
+            { scaleY: wave(clock, 1, 0.08, 3, c.ph + 0.4) },
+          ]}
+        />
+      ))}
+      <Sprite src={T.blob} color={pal[2]} x={-width * 0.2} y={stand - height * 0.07} w={width * 1.4} h={height * 0.18} opacity={wave(clock, 0.35, 0.12, 2, 0.4)} transform={[{ translateX: wave(clock, 0, width * 0.1, 1, 0.6) }]} />
+    </View>
   );
-}
+});
 
+// ---------- Liquid light: big soft fields of color flowing into each other ----------
+const Liquid = memo(function Liquid({ pal, clock, width, height }) {
+  const T = textures();
+  const fields = [
+    { t: 'cloud', c: 0, w: 1.9, x: -0.5, y: -0.1, o: 0.8, kx: 1, ky: 2, ph: 0.0 },
+    { t: 'cloud', c: 1, w: 1.6, x: 0.0, y: 0.15, o: 0.65, kx: 2, ky: 1, ph: 0.3 },
+    { t: 'blob', c: 2, w: 1.3, x: -0.2, y: 0.4, o: 0.5, kx: 1, ky: 1, ph: 0.55 },
+    { t: 'cloud', c: 0, w: 1.8, x: -0.4, y: 0.55, o: 0.8, kx: 1, ky: 2, ph: 0.7 },
+    { t: 'cloud', c: 1, w: 1.5, x: -0.1, y: 0.7, o: 0.6, kx: 2, ky: 1, ph: 0.9 },
+    { t: 'blob', c: 2, w: 1.0, x: 0.2, y: 0.25, o: 0.4, kx: 1, ky: 2, ph: 0.15 },
+  ];
+  return (
+    <View style={FILL} pointerEvents="none">
+      {fields.map((f, i) => {
+        const s = width * f.w;
+        return (
+          <Sprite
+            key={i}
+            src={T[f.t]}
+            color={pal[f.c]}
+            x={f.x * width}
+            y={f.y * height}
+            w={s}
+            h={s}
+            opacity={wave(clock, f.o, 0.18, 2, f.ph + 0.4)}
+            transform={[
+              { translateX: wave(clock, 0, width * 0.22, f.kx, f.ph) },
+              { translateY: wave(clock, 0, height * 0.12, f.ky, f.ph + 0.2) },
+              { rotate: wave(clock, 0, 25, 1, f.ph, 'deg') },
+              { scale: wave(clock, 1, 0.14, 2, f.ph) },
+            ]}
+          />
+        );
+      })}
+      <Sprite src={T.band} color={pal[2]} x={width * 0.2} y={-height * 0.3} w={width * 0.5} h={height * 1.6} opacity={0.3} transform={[{ translateX: wave(clock, 0, width * 0.7, 1, 0) }, { rotate: '24deg' }]} />
+    </View>
+  );
+});
+
+// ---------- Nebula: drifting clouds with a quiet star field ----------
+const Nebula = memo(function Nebula({ pal, clock, width, height }) {
+  const T = textures();
+  const clouds = [
+    { c: 0, w: 2.0, x: -0.6, y: -0.15, o: 0.6, ph: 0.0 },
+    { c: 1, w: 1.7, x: -0.1, y: 0.2, o: 0.5, ph: 0.3 },
+    { c: 0, w: 2.0, x: -0.5, y: 0.5, o: 0.6, ph: 0.6 },
+    { c: 2, w: 1.3, x: 0.1, y: 0.05, o: 0.3, ph: 0.85 },
+  ];
+  return (
+    <View style={FILL} pointerEvents="none">
+      {clouds.map((c, i) => {
+        const s = width * c.w;
+        return (
+          <Sprite
+            key={i}
+            src={T.cloud}
+            color={pal[c.c]}
+            x={c.x * width}
+            y={c.y * height}
+            w={s}
+            h={s}
+            opacity={wave(clock, c.o, 0.15, 1, c.ph)}
+            transform={[{ translateX: wave(clock, 0, width * 0.1, 1, c.ph) }, { translateY: wave(clock, 0, height * 0.05, 1, c.ph + 0.3) }, { rotate: wave(clock, 0, 40, 1, c.ph, 'deg') }]}
+          />
+        );
+      })}
+      {Array.from({ length: 26 }, (_, i) => {
+        const sz = 5 + rnd(i, 1) * 9;
+        return (
+          <Sprite
+            key={'s' + i}
+            src={T.dot}
+            color={i % 4 ? '#FFFFFF' : pal[2]}
+            x={rnd(i, 2) * width}
+            y={rnd(i, 3) * height * 0.85}
+            w={sz}
+            h={sz}
+            opacity={wave(clock, 0.5, 0.45, 2 + Math.floor(rnd(i, 4) * 4), rnd(i, 5))}
+            transform={[{ translateX: wave(clock, 0, 6 + rnd(i, 6) * 14, 1, rnd(i, 7)) }, { translateY: wave(clock, 0, 5 + rnd(i, 8) * 10, 1, rnd(i, 9)) }]}
+          />
+        );
+      })}
+    </View>
+  );
+});
+
+// ---------- Silk: long ribbons of light sliding across ----------
+const Silk = memo(function Silk({ pal, clock, width, height }) {
+  const T = textures();
+  const ribbons = [
+    { x: -0.25, w: 0.55, c: 0, o: 0.55, k: 1, ph: 0.0 },
+    { x: 0.05, w: 0.4, c: 1, o: 0.55, k: 2, ph: 0.2 },
+    { x: 0.35, w: 0.6, c: 0, o: 0.5, k: 1, ph: 0.45 },
+    { x: -0.1, w: 0.18, c: 2, o: 0.5, k: 2, ph: 0.65 },
+    { x: 0.55, w: 0.45, c: 1, o: 0.45, k: 1, ph: 0.8 },
+    { x: 0.25, w: 0.14, c: 2, o: 0.45, k: 2, ph: 0.35 },
+  ];
+  return (
+    <View style={FILL} pointerEvents="none">
+      {ribbons.map((r, i) => (
+        <Sprite
+          key={i}
+          src={T.band}
+          color={pal[r.c]}
+          x={r.x * width}
+          y={-height * 0.25}
+          w={width * r.w}
+          h={height * 1.5}
+          opacity={wave(clock, r.o, 0.22, 2, r.ph)}
+          transform={[{ translateX: wave(clock, 0, width * 0.3, r.k, r.ph) }, { rotate: wave(clock, -24, 4, 1, r.ph, 'deg') }]}
+        />
+      ))}
+      <Sprite src={T.blob} color={pal[1]} x={-width * 0.3} y={height * 0.6} w={width * 1.6} h={height * 0.5} opacity={wave(clock, 0.35, 0.1, 1, 0.5)} />
+    </View>
+  );
+});
+
+// ---------- Embers: soft flames rising from the bottom, with a few sparks ----------
 const Fire = memo(function Fire({ pal, clock, width, height }) {
+  const T = textures();
   const rows = [
-    { n: 6, hf: 0.58, wf: 2.7, a: 0.5, c: [0, 0, 1], base: -0.05 },
-    { n: 8, hf: 0.44, wf: 2.3, a: 0.62, c: [0, 1, 2], base: -0.04 },
-    { n: 11, hf: 0.31, wf: 2.0, a: 0.78, c: [1, 2, 2], base: -0.03 },
+    { n: 6, w: 0.36, h: 0.55, o: 0.5, cols: [0, 1], y: 0.0 },
+    { n: 7, w: 0.26, h: 0.38, o: 0.62, cols: [1, 2], y: 0.04 },
   ];
   let id = 0;
   return (
     <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
+      <Sprite src={T.blob} color={pal[0]} x={-width * 0.4} y={height * 0.55} w={width * 1.8} h={height * 0.6} opacity={wave(clock, 0.7, 0.12, 3, 0)} />
+      <Sprite src={T.blob} color={pal[1]} x={-width * 0.1} y={height * 0.72} w={width * 1.2} h={height * 0.35} opacity={wave(clock, 0.55, 0.15, 4, 0.3)} />
       {rows.map((r, ri) => {
         const sp = width / r.n;
         return Array.from({ length: r.n }, (_, i) => {
           id += 1;
-          const w = sp * r.wf * (0.8 + rnd(id, 1) * 0.5);
-          const h = height * r.hf * (0.7 + rnd(id, 2) * 0.6);
-          const x = (i + 0.5) * sp + (rnd(id, 3) - 0.5) * sp * 0.5;
-          return <Flame key={ri + '-' + i} x={x} w={w} h={h} base={height * r.base} pal={pal} a={r.a} cols={r.c} clock={clock} seed={id} />;
+          const w = width * r.w * (0.8 + rnd(id, 1) * 0.4);
+          const h = height * r.h * (0.75 + rnd(id, 2) * 0.5);
+          const x = (i + 0.5) * sp - w / 2 + (rnd(id, 3) - 0.5) * sp * 0.4;
+          const k = 3 + Math.floor(rnd(id, 4) * 5);
+          const ph = rnd(id, 5);
+          return (
+            <Sprite
+              key={ri + '-' + i}
+              src={T.flame}
+              color={pal[r.cols[i % 2]]}
+              x={x}
+              y={height - h * 0.9 + height * r.y}
+              w={w}
+              h={h}
+              opacity={wave(clock, r.o, 0.18, k, ph)}
+              transform={[{ translateX: wave(clock, 0, w * 0.12, 2, ph) }, { scaleY: wave(clock, 1, 0.16, k, ph + 0.3) }, { scaleX: wave(clock, 1, 0.1, k + 1, ph) }]}
+            />
+          );
         });
       })}
-      {embers({ pal, clock, width, height, count: 22, rise: height * 0.7, size: 3.2 })}
-    </View>
-  );
-});
-
-// ---------- Aura: big soft lights drifting, with a slow shine sweeping across ----------
-const Aura = memo(function Aura({ pal, clock, width, height }) {
-  const orbs = [
-    { s: 1.25, l: -0.4, t: 0.0, c: 0, a: 0.55 },
-    { s: 1.0, l: 0.4, t: 0.25, c: 1, a: 0.5 },
-    { s: 1.3, l: -0.3, t: 0.55, c: 0, a: 0.6 },
-    { s: 0.9, l: 0.5, t: 0.6, c: 2, a: 0.4 },
-    { s: 0.8, l: 0.0, t: 0.3, c: 1, a: 0.35 },
-  ];
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      {orbs.map((o, i) => (
-        <Animated.View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: o.l * width,
-            top: o.t * height,
-            transform: [
-              { translateX: wave(clock, 0, width * 0.16, 1 + (i % 3), i * 0.21) },
-              { translateY: wave(clock, 0, height * 0.06, 1 + ((i + 1) % 3), i * 0.33) },
-              { scale: wave(clock, 1.05, 0.12, 2 + (i % 2), i * 0.17) },
-            ],
-          }}
-        >
-          <Soft size={o.s * width} color={pal[o.c]} alpha={o.a} />
-        </Animated.View>
-      ))}
-      <Animated.View
-        style={{
-          position: 'absolute',
-          left: -width * 0.2,
-          top: height * 0.1,
-          width: width * 1.4,
-          height: height * 0.35,
-          transform: [{ translateX: wave(clock, 0, width * 0.5, 1, 0) }, { rotate: '-18deg' }],
-        }}
-      >
-        <LinearGradient colors={[rgba(pal[2], 0), rgba(pal[2], 0.16), rgba(pal[2], 0)]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ flex: 1 }} />
-      </Animated.View>
-    </View>
-  );
-});
-
-// ---------- Sparkles: twinkling four-point stars and floating dust ----------
-function Star({ x, y, size, pal, clock, seed }) {
-  const k = 4 + Math.floor(rnd(seed, 1) * 7);
-  const ph = rnd(seed, 2);
-  const col = rnd(seed, 3) > 0.5 ? pal[2] : pal[1];
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={{
-        position: 'absolute',
-        left: x - size / 2,
-        top: y - size / 2,
-        width: size,
-        height: size,
-        alignItems: 'center',
-        justifyContent: 'center',
-        opacity: wave(clock, 0.55, 0.45, k, ph),
-        transform: [{ scale: wave(clock, 0.65, 0.35, k, ph) }, { rotate: wave(clock, 0, 25, 2, ph, 'deg') }],
-      }}
-    >
-      <View style={{ position: 'absolute', width: size * 0.5, height: size * 0.5, borderRadius: size * 0.25, backgroundColor: pal[1], opacity: 0.25 }} />
-      <View style={{ position: 'absolute', width: size * 0.14, height: size, borderRadius: size * 0.07, backgroundColor: col }} />
-      <View style={{ position: 'absolute', width: size, height: size * 0.14, borderRadius: size * 0.07, backgroundColor: col }} />
-      <View style={{ width: size * 0.22, height: size * 0.22, borderRadius: size * 0.11, backgroundColor: '#FFFFFF' }} />
-    </Animated.View>
-  );
-}
-
-const Sparks = memo(function Sparks({ pal, clock, width, height }) {
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      {Array.from({ length: 30 }, (_, i) => (
-        <Star key={i} x={rnd(i, 7) * width} y={rnd(i, 8) * height * 0.92} size={10 + rnd(i, 9) * 26} pal={pal} clock={clock} seed={i + 1} />
-      ))}
-      {embers({ pal, clock, width, height, count: 16, rise: height * 0.8, size: 2.6 })}
-    </View>
-  );
-});
-
-// ---------- Pulse: rings spreading out from behind the cover, with a breathing glow ----------
-const Pulse = memo(function Pulse({ pal, clock, width, height }) {
-  const S = width * 0.55;
-  const cx = width / 2;
-  const cy = height * 0.33;
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      <Animated.View style={{ position: 'absolute', left: cx - S, top: cy - S, transform: [{ scale: wave(clock, 1.02, 0.14, 5, 0) }] }}>
-        <Soft size={S * 2} color={pal[0]} alpha={0.65} />
-      </Animated.View>
-      {[0, 1, 2, 3].map((i) => (
-        <Animated.View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: cx - S / 2,
-            top: cy - S / 2,
-            width: S,
-            height: S,
-            borderRadius: S / 2,
-            borderWidth: i % 2 ? 2 : 4,
-            borderColor: rgba(i % 2 ? pal[2] : pal[1], 0.9),
-            backgroundColor: rgba(pal[0], 0.06),
-            opacity: saw(clock, 3, i / 4, (u) => (u < 0.1 ? (u / 0.1) * 0.85 : 0.85 * (1 - u))),
-            transform: [{ scale: saw(clock, 3, i / 4, (u) => 0.55 + u * 2.3) }],
-          }}
-        />
-      ))}
-    </View>
-  );
-});
-
-// ---------- Aurora: waving curtains of light ----------
-const Aurora = memo(function Aurora({ pal, clock, width, height }) {
-  const rib = [
-    { l: -0.1, c: 1, c2: 2 },
-    { l: 0.15, c: 2, c2: 1 },
-    { l: 0.4, c: 1, c2: 0 },
-    { l: 0.62, c: 0, c2: 2 },
-    { l: 0.85, c: 2, c2: 1 },
-  ];
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} a={0.8} />
-      {rib.map((r, i) => {
-        const w = width * 0.5;
-        const h = height * 0.85;
+      {Array.from({ length: 14 }, (_, i) => {
+        const k = 1 + Math.floor(rnd(i, 1) * 3);
+        const ph = rnd(i, 2);
+        const sz = 5 + rnd(i, 3) * 6;
+        const sway = 8 + rnd(i, 4) * 20;
         return (
-          <Animated.View
-            key={i}
-            style={{
-              position: 'absolute',
-              left: r.l * width,
-              top: -height * 0.05,
-              width: w,
-              height: h,
-              alignItems: 'center',
-              opacity: wave(clock, 0.6, 0.35, 2 + (i % 3), i * 0.2),
-              transform: [
-                { translateX: wave(clock, 0, width * 0.12, 1 + (i % 3), i * 0.17) },
-                { rotate: wave(clock, 0, 8, 1 + ((i + 1) % 3), i * 0.3, 'deg') },
-                { scaleX: wave(clock, 1, 0.25, 2 + (i % 2), i * 0.11) },
-              ],
-            }}
-          >
-            {[1, 0.66, 0.36].map((k, j) => (
-              <LinearGradient
-                key={j}
-                colors={[rgba(pal[r.c], 0), rgba(pal[r.c], 0.34 + j * 0.08), rgba(pal[r.c2], 0.3 + j * 0.06), rgba(pal[r.c], 0)]}
-                locations={[0, 0.32, 0.7, 1]}
-                style={{ position: 'absolute', top: 0, bottom: 0, width: w * k, borderRadius: (w * k) / 2 }}
-              />
-            ))}
-          </Animated.View>
-        );
-      })}
-      {Array.from({ length: 14 }, (_, i) => (
-        <Star key={'s' + i} x={rnd(i, 21) * width} y={rnd(i, 22) * height * 0.5} size={6 + rnd(i, 23) * 8} pal={pal} clock={clock} seed={i + 40} />
-      ))}
-    </View>
-  );
-});
-
-// ---------- Waves: rolling water layers ----------
-const Waves = memo(function Waves({ pal, clock, width, height }) {
-  const layers = [
-    { c: 0, a: 0.55, y: 0.66, k: 1, d: 0.62 },
-    { c: 1, a: 0.5, y: 0.73, k: 2, d: 0.55 },
-    { c: 2, a: 0.42, y: 0.8, k: 3, d: 0.5 },
-  ];
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} a={0.7} />
-      {layers.map((L, i) => {
-        const D = width * L.d * 1.4;
-        const sp = D * 0.62;
-        const n = Math.ceil(width / sp) + 3;
-        return (
-          <Animated.View
-            key={i}
-            needsOffscreenAlphaCompositing
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: -sp * 1.5,
-              top: height * L.y,
-              width: n * sp,
-              height: height,
-              opacity: L.a,
-              transform: [{ translateX: saw(clock, L.k, i * 0.3, (u) => (i % 2 ? -u : u) * sp) }, { translateY: wave(clock, 0, 6 + i * 2, 4 + i, i * 0.4) }],
-            }}
-          >
-            {Array.from({ length: n }, (_, j) => (
-              <View key={j} style={{ position: 'absolute', left: j * sp, top: 0, width: D, height: D, borderRadius: D / 2, backgroundColor: pal[L.c] }} />
-            ))}
-            <View style={{ position: 'absolute', left: 0, right: 0, top: D * 0.5, height: height, backgroundColor: pal[L.c] }} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-// ---------- Bokeh: glassy bubbles of light drifting up ----------
-const Bokeh = memo(function Bokeh({ pal, clock, width, height }) {
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      {Array.from({ length: 16 }, (_, i) => {
-        const sz = 26 + rnd(i, 1) * 96;
-        const k = 1 + Math.floor(rnd(i, 2) * 2);
-        const ph = rnd(i, 3);
-        return (
-          <Animated.View
-            key={i}
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: rnd(i, 4) * (width - sz),
-              top: height * 0.85,
-              width: sz,
-              height: sz,
-              borderRadius: sz / 2,
-              borderWidth: 2,
-              borderColor: rgba(pal[2], 0.55),
-              backgroundColor: rgba(pal[1], 0.13),
-              opacity: saw(clock, k, ph, fadeInOut),
-              transform: [
-                { translateX: saw(clock, k, ph, (u) => Math.sin(u * TAU) * (20 + rnd(i, 5) * 30)) },
-                { translateY: saw(clock, k, ph, (u) => -u * height * 0.95) },
-                { scale: wave(clock, 1, 0.08, 3, ph) },
-              ],
-            }}
-          >
-            <View style={{ position: 'absolute', left: sz * 0.2, top: sz * 0.16, width: sz * 0.22, height: sz * 0.12, borderRadius: sz * 0.1, backgroundColor: '#FFFFFF', opacity: 0.45 }} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-// ---------- Galaxy: twinkling stars, slow nebulas and shooting stars ----------
-const Galaxy = memo(function Galaxy({ pal, clock, width, height }) {
-  return (
-    <View style={FILL} pointerEvents="none">
-      {[
-        { s: 1.3, l: -0.3, t: 0.05, c: 0, a: 0.5 },
-        { s: 1.1, l: 0.3, t: 0.4, c: 1, a: 0.35 },
-        { s: 1.2, l: -0.2, t: 0.65, c: 0, a: 0.45 },
-      ].map((o, i) => (
-        <Animated.View
-          key={i}
-          style={{
-            position: 'absolute',
-            left: o.l * width,
-            top: o.t * height,
-            transform: [{ translateX: wave(clock, 0, width * 0.1, 1, i * 0.3) }, { translateY: wave(clock, 0, height * 0.04, 2, i * 0.2) }],
-          }}
-        >
-          <Soft size={o.s * width} color={pal[o.c]} alpha={o.a} />
-        </Animated.View>
-      ))}
-      {Array.from({ length: 44 }, (_, i) => {
-        const sz = 1.5 + rnd(i, 1) * 3;
-        const k = 3 + Math.floor(rnd(i, 2) * 8);
-        return (
-          <Animated.View
-            key={i}
-            style={{
-              position: 'absolute',
-              left: rnd(i, 3) * width,
-              top: rnd(i, 4) * height,
-              width: sz,
-              height: sz,
-              borderRadius: sz / 2,
-              backgroundColor: i % 3 ? '#FFFFFF' : pal[2],
-              opacity: wave(clock, 0.5, 0.5, k, rnd(i, 5)),
-            }}
+          <Sprite
+            key={'e' + i}
+            src={T.dot}
+            color={pal[2]}
+            x={rnd(i, 5) * width}
+            y={height * 0.96}
+            w={sz}
+            h={sz}
+            opacity={saw(clock, k, ph, (u) => (u < 0.12 ? u / 0.12 : u > 0.7 ? (1 - u) / 0.3 : 1))}
+            transform={[{ translateX: saw(clock, k, ph, (u) => Math.sin(u * TAU * 2) * sway) }, { translateY: saw(clock, k, ph, (u) => -u * height * 0.7) }]}
           />
         );
       })}
-      {[0, 1].map((i) => (
-        <Animated.View
-          key={'m' + i}
-          style={{
-            position: 'absolute',
-            left: 0,
-            top: height * (0.08 + i * 0.22),
-            width: 120,
-            height: 3,
-            borderRadius: 2,
-            opacity: saw(clock, 1, i * 0.5, (u) => (u < 0.3 ? Math.sin((Math.PI * u) / 0.3) : 0)),
-            transform: [
-              { translateX: saw(clock, 1, i * 0.5, (u) => -120 + Math.min(1, u / 0.3) * (width + 240)) },
-              { translateY: saw(clock, 1, i * 0.5, (u) => Math.min(1, u / 0.3) * (width + 240) * 0.5) },
-              { rotate: '27deg' },
-            ],
-          }}
-        >
-          <LinearGradient colors={[rgba(pal[2], 0), '#FFFFFF']} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ flex: 1, borderRadius: 2 }} />
-        </Animated.View>
-      ))}
     </View>
   );
 });
 
-// ---------- Lava: slow blobs rising and sinking ----------
-const Lava = memo(function Lava({ pal, clock, width, height }) {
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      {Array.from({ length: 6 }, (_, i) => {
-        const sz = width * (0.5 + rnd(i, 1) * 0.45);
-        return (
-          <Animated.View
-            key={i}
-            style={{
-              position: 'absolute',
-              left: rnd(i, 2) * (width - sz * 0.6) - sz * 0.2,
-              top: height * 0.45,
-              transform: [
-                { translateX: wave(clock, 0, width * 0.14, 1 + (i % 3), rnd(i, 3)) },
-                { translateY: wave(clock, 0, height * 0.3, 1 + (i % 2), rnd(i, 4)) },
-                { scale: wave(clock, 1, 0.18, 2 + (i % 3), rnd(i, 5)) },
-              ],
-            }}
-          >
-            <Soft size={sz} color={pal[i % 3]} alpha={0.62} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-// ---------- Equalizer: dancing bars ----------
-const Bars = memo(function Bars({ pal, clock, width, height }) {
-  const n = 24;
-  const gap = 4;
-  const bw = (width - gap * (n + 1)) / n;
-  const H = height * 0.4;
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} a={0.6} />
-      {Array.from({ length: n }, (_, i) => {
-        const k = 3 + Math.floor(rnd(i, 1) * 8);
-        const ph = rnd(i, 2);
-        return (
-          <Animated.View
-            key={i}
-            style={{
-              position: 'absolute',
-              left: gap + i * (bw + gap),
-              bottom: 0,
-              width: bw,
-              height: H,
-              opacity: 0.88,
-              transform: [{ translateY: wave(clock, (H / 2) * 0.45, -(H / 2) * 0.45, k, ph) }, { scaleY: wave(clock, 0.55, 0.45, k, ph) }],
-            }}
-          >
-            <LinearGradient colors={[pal[2], pal[1], pal[0]]} style={{ flex: 1, borderTopLeftRadius: bw / 2, borderTopRightRadius: bw / 2 }} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-// ---------- Neon rain: glowing streaks falling ----------
-const Rain = memo(function Rain({ pal, clock, width, height }) {
-  const span = height + 300;
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} />
-      {Array.from({ length: 30 }, (_, i) => {
-        const k = 3 + Math.floor(rnd(i, 1) * 6);
-        const ph = rnd(i, 2);
-        const h = 50 + rnd(i, 3) * 90;
-        const c = i % 2 ? pal[1] : pal[2];
-        return (
-          <Animated.View
-            key={i}
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: rnd(i, 4) * width,
-              top: 0,
-              width: 2 + rnd(i, 5) * 1.6,
-              height: h,
-              opacity: 0.35 + rnd(i, 6) * 0.45,
-              transform: [
-                { translateX: saw(clock, k, ph, (u) => -u * span * 0.18) },
-                { translateY: saw(clock, k, ph, (u) => -h + u * span) },
-                { rotate: '10deg' },
-              ],
-            }}
-          >
-            <LinearGradient colors={[rgba(c, 0), c]} style={{ flex: 1, borderRadius: 2 }} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-// ---------- Fireflies: little lights wandering and blinking ----------
-const Fireflies = memo(function Fireflies({ pal, clock, width, height }) {
-  return (
-    <View style={FILL} pointerEvents="none">
-      <Base pal={pal} height={height} a={0.7} />
-      {Array.from({ length: 20 }, (_, i) => {
-        const sz = 5 + rnd(i, 1) * 5;
-        return (
-          <Animated.View
-            key={i}
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              left: rnd(i, 2) * width,
-              top: height * (0.1 + rnd(i, 3) * 0.8),
-              opacity: wave(clock, 0.5, 0.5, 3 + Math.floor(rnd(i, 4) * 5), rnd(i, 5)),
-              transform: [
-                { translateX: wave(clock, 0, 40 + rnd(i, 6) * 50, 1 + Math.floor(rnd(i, 7) * 3), rnd(i, 8)) },
-                { translateY: wave(clock, 0, 40 + rnd(i, 9) * 40, 1 + Math.floor(rnd(i, 10) * 3), rnd(i, 11)) },
-              ],
-            }}
-          >
-            <View style={{ position: 'absolute', left: -sz * 2, top: -sz * 2, width: sz * 5, height: sz * 5, borderRadius: sz * 2.5, backgroundColor: pal[1], opacity: 0.2 }} />
-            <View style={{ position: 'absolute', left: -sz, top: -sz, width: sz * 3, height: sz * 3, borderRadius: sz * 1.5, backgroundColor: pal[2], opacity: 0.3 }} />
-            <View style={{ width: sz, height: sz, borderRadius: sz / 2, backgroundColor: '#FFFFFF' }} />
-          </Animated.View>
-        );
-      })}
-    </View>
-  );
-});
-
-const EFFECTS = {
-  fire: Fire,
-  aura: Aura,
-  sparks: Sparks,
-  pulse: Pulse,
-  aurora: Aurora,
-  waves: Waves,
-  bokeh: Bokeh,
-  galaxy: Galaxy,
-  lava: Lava,
-  bars: Bars,
-  rain: Rain,
-  fireflies: Fireflies,
-};
+const EFFECTS = { aurora: Aurora, liquid: Liquid, nebula: Nebula, silk: Silk, fire: Fire };
+const PERIOD = { fire: 8000 }; // embers move faster than the rest (default 36 seconds per round)
 
 // When the colors change (other color chosen, or the cover changed) the new ones fade in over the old ones
 function usePalLayers(spec) {
@@ -905,7 +745,7 @@ function usePalLayers(spec) {
     last.current = sig;
     const nl = { key: sig, pal: spec.pal, base: spec.base, op: new Animated.Value(0) };
     setLayers((cur) => [...cur, nl]);
-    Animated.timing(nl.op, { toValue: 1, duration: 900, useNativeDriver: true }).start(() => {
+    Animated.timing(nl.op, { toValue: 1, duration: 1000, useNativeDriver: true }).start(() => {
       setLayers((cur) => cur.slice(-1));
     });
   }, [sig]);
@@ -921,7 +761,8 @@ export function GlowBackground({ glow, playing, visible, colors, song, covers, p
   const [run, setRun] = useState(false);
   const active = !!playing && !!visible;
   const g = glow || GLOW_DEFAULT;
-  const Effect = EFFECTS[g.style] || null;
+  const styleKey = ALIAS[g.style] || g.style;
+  const Effect = EFFECTS[styleKey] || null;
 
   const cover = useCoverColors(g.color === 'cover' && !!visible, song, covers, pinned, currentTime);
   const spec = palette(g.color, colors, cover);
@@ -929,16 +770,16 @@ export function GlowBackground({ glow, playing, visible, colors, song, covers, p
 
   const sf = 0.5 + (typeof g.speed === 'number' ? g.speed : 0.5) * 1.5;
   const level = 0.3 + (typeof g.intensity === 'number' ? g.intensity : 0.75) * 0.7;
-  const clock = useClock(run && !!Effect, 12000 / sf);
+  const clock = useClock(run && !!Effect, (PERIOD[styleKey] || 36000) / sf);
 
-  // Playing: everything moves. Paused: it dims and stops moving (saves battery).
+  // Playing: it flows. Paused: it dims and stops moving (saves battery).
   useEffect(() => {
-    Animated.timing(fade, { toValue: active ? 1 : 0.3, duration: 600, useNativeDriver: true }).start();
+    Animated.timing(fade, { toValue: active ? 1 : 0.3, duration: 700, useNativeDriver: true }).start();
     if (active) {
       setRun(true);
       return undefined;
     }
-    const id = setTimeout(() => setRun(false), 900);
+    const id = setTimeout(() => setRun(false), 1000);
     return () => clearTimeout(id);
   }, [active]);
 
