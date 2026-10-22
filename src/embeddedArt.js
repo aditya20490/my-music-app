@@ -262,3 +262,166 @@ export async function extractMkaCover(song) {
   const out = await Mka.cover(song.mka.path, song.mka.track, base);
   return out ? 'file://' + out : null;
 }
+
+// ---------- ALL covers of one song (the main cover first, then the extra covers) ----------
+// The tag editor can keep several full-size covers inside one file. These readers find every one of them.
+// Nothing is resized or compressed: each picture is copied out exactly as it is stored.
+async function allFromId3(uri, head) {
+  const ver = head[3];
+  const flags = head[5];
+  const tagSize = syncsafe(head, 6);
+  const end = 10 + tagSize;
+  let pos = 10;
+  if (flags & 0x40 && ver >= 3) {
+    const eh = await readBytes(uri, 10, 4);
+    pos += ver === 4 ? syncsafe(eh, 0) : u32(eh, 0) + 4;
+  }
+  const hdrLen = ver === 2 ? 6 : 10;
+  const found = [];
+  for (let guard = 0; guard < 300 && pos + hdrLen <= end; guard++) {
+    const fh = await readBytes(uri, pos, hdrLen);
+    if (fh.length < hdrLen || fh[0] === 0) break;
+    const id = ver === 2 ? ascii(fh, 0, 3) : ascii(fh, 0, 4);
+    let size;
+    let extra = 0;
+    if (ver === 2) {
+      size = (fh[3] << 16) | (fh[4] << 8) | fh[5];
+    } else if (ver === 4) {
+      size = syncsafe(fh, 4);
+      if (fh[9] & 1) extra = 4;
+    } else {
+      size = u32(fh, 4);
+    }
+    if (size <= 0 || pos + hdrLen + size > end + 16) break;
+    if (id === 'APIC' || id === 'PIC') {
+      const dataPos = pos + hdrLen + extra;
+      const dataLen = size - extra;
+      const probe = await readBytes(uri, dataPos, Math.min(dataLen, 600));
+      const img = findImageStart(probe);
+      if (img) found.push({ pos: dataPos + img.at, len: dataLen - img.at, ext: img.ext, type: picTypeOf(probe, ver) });
+    }
+    pos += hdrLen + size;
+  }
+  return found;
+}
+
+async function allFromFlac(uri) {
+  let pos = 4;
+  const found = [];
+  for (let guard = 0; guard < 64; guard++) {
+    const bh = await readBytes(uri, pos, 4);
+    if (bh.length < 4) break;
+    const last = bh[0] & 0x80;
+    const type = bh[0] & 0x7f;
+    const len = (bh[1] << 16) | (bh[2] << 8) | bh[3];
+    if (type === 6) {
+      const p = await readBytes(uri, pos + 4, Math.min(len, 2048));
+      const picT = u32(p, 0);
+      const ml = u32(p, 4);
+      let o = 8 + ml;
+      const dl = u32(p, o);
+      o += 4 + dl + 16;
+      const dataLen = u32(p, o);
+      o += 4;
+      if (dataLen > 0 && o < len) {
+        const probe = await readBytes(uri, pos + 4 + o, 16);
+        const img = findImageStart(probe);
+        found.push({ pos: pos + 4 + o, len: dataLen, ext: img ? img.ext : 'jpg', type: picT });
+      }
+    }
+    pos += 4 + len;
+    if (last) break;
+  }
+  return found;
+}
+
+async function allFromMp4(uri) {
+  const info = await FS.getInfoAsync(uri);
+  const total = info && info.size ? info.size : 0;
+  if (!total) return [];
+  const moov = await findChild(uri, 0, total, 'moov');
+  if (!moov) return [];
+  const udta = await findChild(uri, moov.pos + moov.hdr, moov.pos + moov.size, 'udta');
+  if (!udta) return [];
+  const meta = await findChild(uri, udta.pos + udta.hdr, udta.pos + udta.size, 'meta');
+  if (!meta) return [];
+  const ilst = await findChild(uri, meta.pos + meta.hdr + 4, meta.pos + meta.size, 'ilst');
+  if (!ilst) return [];
+  const covr = await findChild(uri, ilst.pos + ilst.hdr, ilst.pos + ilst.size, 'covr');
+  if (!covr) return [];
+  const found = [];
+  const cend = covr.pos + covr.size;
+  let p = covr.pos + covr.hdr;
+  for (let guard = 0; guard < 64 && p + 8 <= cend; guard++) {
+    const a = await readAtom(uri, p);
+    if (!a) break;
+    const size = a.size === 0 ? cend - p : a.size;
+    if (size < 8) break;
+    if (a.type === 'data') {
+      const start = p + a.hdr + 8;
+      const len = size - a.hdr - 8;
+      if (len > 0) {
+        const probe = await readBytes(uri, start, 16);
+        const img = findImageStart(probe);
+        found.push({ pos: start, len, ext: img ? img.ext : 'jpg', type: found.length === 0 ? 3 : 0 });
+      }
+    }
+    p += size;
+  }
+  return found;
+}
+
+const allCache = new Map(); // song id -> { sig, list }
+
+// Returns a list of file:// uris, the main cover first. Returns [] when the song has fewer than two covers
+// (then the normal single cover is used). The same song is not read again until its file changes.
+export async function extractAllEmbeddedArt(song) {
+  if (!FS || !song || song.mka) return [];
+  const uri = song.uri;
+  let sig = '';
+  try {
+    const info = await FS.getInfoAsync(uri);
+    if (info && info.exists) sig = String(info.size || 0) + '_' + String(Math.floor(info.modificationTime || 0));
+  } catch (e) {}
+  const hit = allCache.get(song.id);
+  if (hit && sig !== '' && hit.sig === sig) return hit.list;
+
+  const head = await readBytes(uri, 0, 12);
+  if (head.length < 8) return [];
+  let found = [];
+  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) {
+    found = await allFromId3(uri, head);
+  } else if (ascii(head, 0, 4) === 'fLaC') {
+    found = await allFromFlac(uri);
+  } else if (ascii(head, 4, 4) === 'ftyp') {
+    found = await allFromMp4(uri);
+  }
+  found = found.filter((c) => c.len > 0 && c.len <= MAX_IMAGE);
+  // the main (front) cover goes first, the others keep the order they have in the file
+  const mainAt = found.findIndex((c) => c.type === 3);
+  if (mainAt > 0) found.unshift(found.splice(mainAt, 1)[0]);
+
+  if (found.length < 2) {
+    allCache.set(song.id, { sig, list: [] });
+    return [];
+  }
+
+  const dir = (FS.cacheDirectory || FS.documentDirectory) + 'covers_all/';
+  try {
+    await FS.makeDirectoryAsync(dir, { intermediates: true });
+  } catch (e) {}
+  const safe = String(song.id).replace(/[^A-Za-z0-9_-]/g, '_');
+  const list = [];
+  for (let i = 0; i < found.length; i++) {
+    try {
+      const b64 = await readB64(uri, found[i].pos, found[i].len);
+      if (!b64) continue;
+      const out = dir + safe + '_' + (sig || 'x') + '_' + i + '.' + found[i].ext;
+      await FS.writeAsStringAsync(out, b64, { encoding: 'base64' });
+      list.push(out);
+    } catch (e) {}
+  }
+  const res = list.length >= 2 ? list : [];
+  allCache.set(song.id, { sig, list: res });
+  return res;
+}
