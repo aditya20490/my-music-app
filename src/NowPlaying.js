@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from './theme';
 import { Art, SeekBar } from './ui';
+import { CoverShow, CoverSheet, useCovers, usePin } from './CoverShow';
 import { fetchLyrics, fetchDetails } from './library';
 import { formatTime, parseLyrics, lyricIndexAt } from './utils';
 import * as Engine from './audioEngine';
@@ -149,6 +150,7 @@ export default function NowPlaying({
   const [eightD, setEightD] = useState(() => Engine.player.isEightD());
   const [eightPanel, setEightPanel] = useState(false); // the 8D settings sheet
   const [verPanel, setVerPanel] = useState(false); // the list of versions (only for .mka bundles)
+  const [coverPanel, setCoverPanel] = useState(false); // choose one of the covers inside the song
   const [eset, setEset] = useState(() => Engine.getEightSettings());
   const [glow, setGlow] = useState(GLOW_DEFAULT); // the glowing background (style, color, intensity, speed)
   const [glowPanel, setGlowPanel] = useState(false);
@@ -344,6 +346,13 @@ export default function NowPlaying({
 
   const songId = song ? song.id : null;
 
+  // All covers stored inside this song (empty when it has one or none), and the one you picked
+  const covers = useCovers(song, visible);
+  const [pinnedCover, setPinnedCover] = usePin(songId);
+  useEffect(() => {
+    setCoverPanel(false);
+  }, [songId]);
+
   // Start from the player's current volume each time the player opens
   useEffect(() => {
     if (visible) {
@@ -420,7 +429,8 @@ export default function NowPlaying({
       visible={visible}
       animationType="slide"
       onRequestClose={() => {
-        if (verPanel) setVerPanel(false);
+        if (coverPanel) setCoverPanel(false);
+        else if (verPanel) setVerPanel(false);
         else if (glowPanel) setGlowPanel(false);
         else if (eightPanel) setEightPanel(false);
         else onClose();
@@ -460,10 +470,29 @@ export default function NowPlaying({
         <Animated.View style={{ flex: 1, opacity: cardOpacity, transform: [{ translateX: tx }] }} {...pan.panHandlers}>
           <View style={s.pageArea}>
             {page === 'player' ? (
-              <TouchableOpacity activeOpacity={1} onPress={onCoverTap} style={{ flex: 1 }}>
+              <TouchableOpacity
+                activeOpacity={1}
+                onPress={onCoverTap}
+                onLongPress={() => {
+                  if (covers.length >= 2) setCoverPanel(true);
+                }}
+                delayLongPress={450}
+                style={{ flex: 1 }}
+              >
                 <View style={s.fullArt}>
                   <View ref={coverBox} collapsable={false} onLayout={measureCover}>
-                    <Art song={song} size={artSize} radius={28} />
+                    {covers.length >= 2 ? (
+                      <CoverShow
+                        key={song.id}
+                        covers={covers}
+                        size={artSize}
+                        radius={28}
+                        currentTime={currentTime}
+                        pinned={pinnedCover}
+                      />
+                    ) : (
+                      <Art song={song} size={artSize} radius={28} />
+                    )}
                   </View>
                 </View>
                 {flash !== 0 ? (
@@ -699,6 +728,19 @@ export default function NowPlaying({
             );
           })}
         </View>
+
+        {/* Cover sheet: hold the cover to choose which of the covers inside the song is shown */}
+        <CoverSheet
+          visible={coverPanel}
+          covers={covers}
+          pinned={pinnedCover}
+          bottomInset={insets.bottom}
+          onClose={() => setCoverPanel(false)}
+          onPick={(i) => {
+            setPinnedCover(i);
+            setCoverPanel(false);
+          }}
+        />
 
         {/* Versions sheet: every version in the bundle, each with its own cover, title, artist and writer */}
         {verPanel && versions ? (
