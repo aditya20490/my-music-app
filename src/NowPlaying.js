@@ -5,6 +5,8 @@
 // (automatic rotation or phone tilt, hall presets, room size, rotation speed, movement intensity, reverb, bass).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
 // When it opens, the cover grows out of the mini player and the buttons fade in.
+// Smooth opening: the Modal is transparent (no white flash), the cover grows first on its own,
+// and the heavy parts (glow background, extra covers, lyrics) are loaded only after the animation ends.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -142,6 +144,19 @@ function volumeIcon(v) {
   return 'volume-high';
 }
 
+// Fades its children in when it appears (used for the glow, so it does not pop in after the opening animation)
+function FadeIn({ children }) {
+  const op = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(op, { toValue: 1, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+  }, []);
+  return (
+    <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: op }}>
+      {children}
+    </Animated.View>
+  );
+}
+
 export default function NowPlaying({
   visible,
   onClose,
@@ -184,6 +199,7 @@ export default function NowPlaying({
   const [eset, setEset] = useState(() => Engine.getEightSettings());
   const [glow, setGlow] = useState(GLOW_DEFAULT); // the glowing background (style and color)
   const [glowPanel, setGlowPanel] = useState(false);
+  const [heavy, setHeavy] = useState(false); // true once the opening animation is done: now the heavy parts may load
   const glowRef = useRef(GLOW_DEFAULT);
 
   useEffect(() => {
@@ -204,13 +220,29 @@ export default function NowPlaying({
   const [coverReady, setCoverReady] = useState(false);
   const [finalBox, setFinalBox] = useState(null);
   const pendingOpen = useRef(false);
+  const startQueued = useRef(false);
   const closing = useRef(false);
 
   function startOpen() {
     pendingOpen.current = false;
     open.stopAnimation();
     Animated.timing(open, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(({ finished }) => {
-      if (finished) setCoverReady(true);
+      if (finished) {
+        setCoverReady(true);
+        setHeavy(true); // the animation is done, now the glow, extra covers and lyrics can load
+      }
+    });
+  }
+
+  // Waits two frames, so the flying cover is really on screen before the animation starts (no stutter at the start)
+  function queueOpen() {
+    if (startQueued.current) return;
+    startQueued.current = true;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        startQueued.current = false;
+        if (pendingOpen.current) startOpen();
+      });
     });
   }
 
@@ -228,6 +260,8 @@ export default function NowPlaying({
   useEffect(() => {
     if (!visible) {
       pendingOpen.current = false;
+      startQueued.current = false;
+      setHeavy(false);
       return undefined;
     }
     closing.current = false;
@@ -238,7 +272,7 @@ export default function NowPlaying({
     const t1 = setTimeout(() => measureCover(), 30);
     const t2 = setTimeout(() => {
       if (pendingOpen.current) startOpen(); // safety: start anyway if the cover could not be measured
-    }, 300);
+    }, 400);
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -334,7 +368,7 @@ export default function NowPlaying({
         coverRect.current = { x, y, w, h };
         if (w > 0) {
           setFinalBox((old) => (old && old.x === x && old.y === y && old.w === w && old.h === h ? old : { x, y, w, h }));
-          if (pendingOpen.current) startOpen();
+          if (pendingOpen.current) queueOpen();
         }
       });
     }
@@ -426,8 +460,9 @@ export default function NowPlaying({
 
   const songId = song ? song.id : null;
 
-  // All covers stored inside this song (empty when it has one or none), and the one you picked
-  const covers = useCovers(song, visible);
+  // All covers stored inside this song (empty when it has one or none), and the one you picked.
+  // They are only read after the opening animation is done, so the animation stays smooth.
+  const covers = useCovers(song, visible && heavy);
   const [pinnedCover, setPinnedCover] = usePin(songId);
   useEffect(() => {
     setCoverPanel(false);
@@ -444,9 +479,9 @@ export default function NowPlaying({
     }
   }, [visible]);
 
-  // Load the lyrics for the playing song (so we know if it has lyrics at all)
+  // Load the lyrics for the playing song (so we know if it has lyrics at all). Starts after the opening animation.
   useEffect(() => {
-    if (!visible || !song) return undefined;
+    if (!visible || !heavy || !song) return undefined;
     let alive = true;
     lineY.current = {};
     if (song.lyricsEdit !== undefined) {
@@ -460,7 +495,7 @@ export default function NowPlaying({
     return () => {
       alive = false;
     };
-  }, [visible, songId, song ? song.lyricsEdit : undefined]);
+  }, [visible, heavy, songId, song ? song.lyricsEdit : undefined]);
 
   // Load technical details (and the file size) when the info page is open
   useEffect(() => {
@@ -511,6 +546,8 @@ export default function NowPlaying({
     floating = (
       <Animated.View
         pointerEvents="none"
+        renderToHardwareTextureAndroid
+        shouldRasterizeIOS
         style={{
           position: 'absolute',
           left: finalBox.x,
@@ -538,6 +575,7 @@ export default function NowPlaying({
   return (
     <Modal
       visible={visible}
+      transparent
       animationType="none"
       onRequestClose={() => {
         if (coverPanel) setCoverPanel(false);
@@ -550,25 +588,29 @@ export default function NowPlaying({
       navigationBarTranslucent
     >
       <View style={{ flex: 1 }}>
-      <Animated.View style={{ flex: 1, opacity: bgOp }}>
+      <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: t.bg }} renderToHardwareTextureAndroid={!coverReady}>
       <LinearGradient
         colors={[t.accent + '66', t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
       >
-        {/* The glowing background: behind everything, never blocks touches */}
-        <GlowBackground
-          glow={glow}
-          playing={playing}
-          visible={visible}
-          colors={{ accent: t.accent, accent2: t.accent2, bg: t.bg }}
-          song={song}
-          covers={covers}
-          pinned={pinnedCover}
-          currentTime={currentTime}
-          nudge={page + (glowPanel ? 'g' : '') + (eightPanel ? 'e' : '') + (verPanel ? 'v' : '') + (coverPanel ? 'c' : '')}
-        />
+        {/* The glowing background: behind everything, never blocks touches. It loads after the opening animation and fades in. */}
+        {heavy ? (
+          <FadeIn>
+            <GlowBackground
+              glow={glow}
+              playing={playing}
+              visible={visible}
+              colors={{ accent: t.accent, accent2: t.accent2, bg: t.bg }}
+              song={song}
+              covers={covers}
+              pinned={pinnedCover}
+              currentTime={currentTime}
+              nudge={page + (glowPanel ? 'g' : '') + (eightPanel ? 'e' : '') + (verPanel ? 'v' : '') + (coverPanel ? 'c' : '')}
+            />
+          </FadeIn>
+        ) : null}
 
-        <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }}>
+        <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }} renderToHardwareTextureAndroid={!coverReady}>
         <View style={s.fullTop}>
           <View style={{ width: 88, flexDirection: 'row' }}>
             <TouchableOpacity onPress={requestClose} style={s.fullTopBtn}>
