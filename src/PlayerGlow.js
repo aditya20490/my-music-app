@@ -1,5 +1,6 @@
 // The animated background of the full-screen player.
-// Five premium styles built from soft layers of light (aurora curtains, liquid light, nebula clouds, silk ribbons, embers).
+// Six premium styles built from soft layers of light (aurora curtains, liquid light, nebula clouds, silk ribbons,
+// sunlight under the ocean, embers).
 // The soft textures are made in code the first time they are needed, so no image files are needed.
 // Only transforms and opacity move, so it all runs on the phone's graphics side (smooth and light on battery).
 // It sits behind everything (buttons and cover stay in front) and never blocks touches.
@@ -23,6 +24,10 @@ const TAU = Math.PI * 2;
 const memo = React.memo;
 const FILL = StyleSheet.absoluteFill;
 
+// How strong and how fast the background is (fixed, there are no sliders for it any more)
+const LEVEL = 0.86;
+const SPEED = 1.1;
+
 export const GLOW_DEFAULT = { style: 'aurora', color: 'cover', intensity: 0.8, speed: 0.4 };
 
 export const GLOW_STYLES = [
@@ -31,6 +36,7 @@ export const GLOW_STYLES = [
   { key: 'liquid', label: 'Liquid light', icon: 'water' },
   { key: 'nebula', label: 'Nebula', icon: 'planet' },
   { key: 'silk', label: 'Silk', icon: 'layers' },
+  { key: 'ocean', label: 'Ocean', icon: 'boat' },
   { key: 'fire', label: 'Embers', icon: 'flame' },
 ];
 
@@ -63,6 +69,12 @@ const PALETTES = {
   indigo: ['#2A1B9E', '#5B6CFF', '#C5CCFF'],
   white: ['#9AA0B8', '#E3E6F5', '#FFFFFF'],
   black: ['#15151C', '#3A3A48', '#8C8CA0'],
+};
+
+// The water of the Ocean style (it keeps these colors unless you pick one of the color chips)
+const OCEAN = {
+  pal: ['#0B5C9E', '#1FB5D6', '#F2FFFF'],
+  base: ['#2AA6C9', '#0A5A86', '#031A33'],
 };
 
 export const GLOW_COLORS = [
@@ -179,8 +191,9 @@ function coverPal(main, second) {
   };
 }
 
-function palette(key, colors, cover) {
+function palette(key, colors, cover, styleKey) {
   let k = key;
+  if (styleKey === 'ocean' && (k === 'cover' || k === 'theme')) return OCEAN;
   if (k === 'cover') {
     if (cover && cover.main) return coverPal(cover.main, cover.second);
     k = 'theme';
@@ -434,20 +447,51 @@ function textures() {
       if (d >= 1) return 0;
       return Math.pow(1 - d * d, 1.6) * smooth(0, 0.12, y) * (0.55 + 0.45 * y) * (0.8 + 0.4 * (vnoise(x * 5, y * 9, 2) - 0.5));
     }),
+    // a shaft of sunlight in water: bright at the top, fading slowly down, soft on both sides
+    ray: tex(32, 192, (x, y) => {
+      const g = Math.exp(-Math.pow((x - 0.5) * 4.2, 2));
+      const fade = Math.pow(1 - smooth(0, 1, y), 1.15);
+      return g * fade * smooth(0, 0.03, y) * (0.8 + 0.3 * vnoise(x * 5, y * 8, 4));
+    }),
+    // the moving net of light that sunlight makes under the water surface
+    caustic: tex(128, 128, (x, y) => {
+      const a = Math.abs(fbm(x * 4, y * 4, 11, 3) - 0.5);
+      const b = Math.abs(fbm(x * 7 + 3, y * 7, 17, 2) - 0.5);
+      const v = Math.max(1 - smooth(0, 0.07, a), (1 - smooth(0, 0.05, b)) * 0.6);
+      return v * smooth(1, 0.25, y) * smooth(0, 0.1, x) * smooth(1, 0.9, x) * 0.85;
+    }),
   };
   return TX;
 }
 
 // ---------- animation helpers ----------
 // One clock (0 -> 1, over and over) drives everything. Each layer picks its own speed (whole cycles) and phase from it.
-function useClock(run, dur) {
+// It restarts itself if it ever stops by accident, and "nudge" restarts it whenever the player changes page or opens a sheet.
+function useClock(run, dur, nudge) {
   const v = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     if (!run) return undefined;
-    const a = Animated.loop(Animated.timing(v, { toValue: 1, duration: dur, easing: Easing.linear, useNativeDriver: true }));
-    a.start();
-    return () => a.stop();
-  }, [run, dur]);
+    let alive = true;
+    let timer = null;
+    const cycle = () => {
+      if (!alive) return;
+      clearTimeout(timer);
+      v.setValue(0);
+      Animated.timing(v, { toValue: 1, duration: dur, easing: Easing.linear, useNativeDriver: true }).start(() => {
+        if (alive) cycle();
+      });
+      // if the animation ever dies without finishing, this brings it back
+      timer = setTimeout(() => {
+        if (alive) v.stopAnimation();
+      }, dur + 1500);
+    };
+    cycle();
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+      v.stopAnimation();
+    };
+  }, [run, dur, nudge]);
   return v;
 }
 
@@ -673,6 +717,62 @@ const Silk = memo(function Silk({ pal, clock, width, height }) {
   );
 });
 
+// ---------- Ocean: you are under the water and the sunlight comes down in slow shafts ----------
+const Ocean = memo(function Ocean({ pal, clock, width, height }) {
+  const T = textures();
+  const rays = [
+    { x: 0.0, w: 0.3, o: 0.5, k: 1, ph: 0.0, a: -16 },
+    { x: 0.18, w: 0.18, o: 0.55, k: 2, ph: 0.3, a: -13 },
+    { x: 0.34, w: 0.34, o: 0.45, k: 1, ph: 0.55, a: -17 },
+    { x: 0.55, w: 0.16, o: 0.55, k: 2, ph: 0.8, a: -12 },
+    { x: 0.68, w: 0.28, o: 0.45, k: 1, ph: 0.15, a: -15 },
+    { x: 0.84, w: 0.2, o: 0.5, k: 2, ph: 0.65, a: -14 },
+  ];
+  return (
+    <View style={FILL} pointerEvents="none">
+      <Sprite src={T.blob} color={pal[2]} x={-width * 0.3} y={-height * 0.22} w={width * 1.6} h={height * 0.5} opacity={wave(clock, 0.75, 0.15, 2, 0.1)} transform={[{ translateX: wave(clock, 0, width * 0.1, 1, 0) }]} />
+      {rays.map((r, i) => (
+        <Sprite
+          key={'r' + i}
+          src={T.ray}
+          color={pal[2]}
+          x={r.x * width}
+          y={-height * 0.1}
+          w={width * r.w}
+          h={height * 1.15}
+          opacity={wave(clock, r.o, 0.22, 2, r.ph)}
+          transform={[
+            { translateX: wave(clock, 0, width * 0.06, r.k, r.ph) },
+            { rotate: wave(clock, r.a, 2.2, 1, r.ph, 'deg') },
+            { scaleX: wave(clock, 1, 0.18, 2, r.ph + 0.4) },
+          ]}
+        />
+      ))}
+      <Sprite src={T.caustic} color={pal[2]} x={-width * 0.2} y={-height * 0.05} w={width * 1.4} h={height * 0.7} opacity={wave(clock, 0.28, 0.1, 3, 0)} transform={[{ translateX: wave(clock, 0, width * 0.12, 1, 0) }, { translateY: wave(clock, 0, height * 0.02, 2, 0.3) }]} />
+      <Sprite src={T.caustic} color={pal[1]} x={-width * 0.1} y={height * 0.05} w={width * 1.3} h={height * 0.7} opacity={wave(clock, 0.2, 0.08, 2, 0.5)} transform={[{ translateX: wave(clock, 0, -width * 0.1, 1, 0.5) }, { scaleX: -1 }]} />
+      {Array.from({ length: 24 }, (_, i) => {
+        const sz = 3 + rnd(i, 1) * 6;
+        const k = 1 + Math.floor(rnd(i, 2) * 2);
+        const ph = rnd(i, 3);
+        return (
+          <Sprite
+            key={'p' + i}
+            src={T.dot}
+            color={pal[2]}
+            x={rnd(i, 4) * width}
+            y={rnd(i, 5) * height}
+            w={sz}
+            h={sz}
+            opacity={wave(clock, 0.45, 0.35, 2 + Math.floor(rnd(i, 6) * 4), rnd(i, 7))}
+            transform={[{ translateX: wave(clock, 0, 10 + rnd(i, 8) * 22, k, ph) }, { translateY: wave(clock, 0, 16 + rnd(i, 9) * 30, k, ph + 0.3) }]}
+          />
+        );
+      })}
+      <Sprite src={T.blob} color={pal[0]} x={-width * 0.3} y={height * 0.7} w={width * 1.6} h={height * 0.5} opacity={0.5} />
+    </View>
+  );
+});
+
 // ---------- Embers: soft flames rising from the bottom, with a few sparks ----------
 const Fire = memo(function Fire({ pal, clock, width, height }) {
   const T = textures();
@@ -732,7 +832,7 @@ const Fire = memo(function Fire({ pal, clock, width, height }) {
   );
 });
 
-const EFFECTS = { aurora: Aurora, liquid: Liquid, nebula: Nebula, silk: Silk, fire: Fire };
+const EFFECTS = { aurora: Aurora, liquid: Liquid, nebula: Nebula, silk: Silk, ocean: Ocean, fire: Fire };
 const PERIOD = { fire: 8000 }; // embers move faster than the rest (default 36 seconds per round)
 
 // When the colors change (other color chosen, or the cover changed) the new ones fade in over the old ones
@@ -753,9 +853,10 @@ function usePalLayers(spec) {
 }
 
 // The background itself.
-// glow = { style, color, intensity, speed }, colors = { accent, accent2, bg }
+// glow = { style, color }, colors = { accent, accent2, bg }
 // song / covers / pinned / currentTime are only used by the "Cover colors" mode
-export function GlowBackground({ glow, playing, visible, colors, song, covers, pinned, currentTime }) {
+// nudge = any text that changes when the player changes page or opens a sheet (it restarts the movement)
+export function GlowBackground({ glow, playing, visible, colors, song, covers, pinned, currentTime, nudge }) {
   const { width, height } = useWindowDimensions();
   const fade = useRef(new Animated.Value(1)).current;
   const [run, setRun] = useState(false);
@@ -764,22 +865,21 @@ export function GlowBackground({ glow, playing, visible, colors, song, covers, p
   const styleKey = ALIAS[g.style] || g.style;
   const Effect = EFFECTS[styleKey] || null;
 
-  const cover = useCoverColors(g.color === 'cover' && !!visible, song, covers, pinned, currentTime);
-  const spec = palette(g.color, colors, cover);
+  const cover = useCoverColors(g.color === 'cover' && styleKey !== 'ocean' && !!visible, song, covers, pinned, currentTime);
+  const spec = palette(g.color, colors, cover, styleKey);
   const layers = usePalLayers(spec);
 
-  const sf = 0.5 + (typeof g.speed === 'number' ? g.speed : 0.5) * 1.5;
-  const level = 0.3 + (typeof g.intensity === 'number' ? g.intensity : 0.75) * 0.7;
-  const clock = useClock(run && !!Effect, (PERIOD[styleKey] || 36000) / sf);
+  const clock = useClock(run && !!Effect, (PERIOD[styleKey] || 36000) / SPEED, nudge);
 
   // Playing: it flows. Paused: it dims and stops moving (saves battery).
+  // A short hiccup in the play state never stops it: it only calms down after 2.5 seconds of real pause.
   useEffect(() => {
     Animated.timing(fade, { toValue: active ? 1 : 0.3, duration: 700, useNativeDriver: true }).start();
     if (active) {
       setRun(true);
       return undefined;
     }
-    const id = setTimeout(() => setRun(false), 1000);
+    const id = setTimeout(() => setRun(false), 2500);
     return () => clearTimeout(id);
   }, [active]);
 
@@ -792,7 +892,7 @@ export function GlowBackground({ glow, playing, visible, colors, song, covers, p
         <Animated.View key={l.key} pointerEvents="none" style={[FILL, { opacity: l.op }]}>
           {l.base ? <LinearGradient colors={l.base} style={FILL} /> : null}
           {Effect ? (
-            <View pointerEvents="none" style={[FILL, { opacity: level }]}>
+            <View pointerEvents="none" style={[FILL, { opacity: LEVEL }]}>
               <Animated.View pointerEvents="none" style={[FILL, { opacity: fade }]}>
                 <Effect pal={l.pal} clock={clock} width={width} height={height} />
               </Animated.View>
