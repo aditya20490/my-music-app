@@ -4,6 +4,7 @@
 // The 8D pill turns the 8D effect on / off. The slider button next to it opens the 8D settings
 // (automatic rotation or phone tilt, hall presets, room size, rotation speed, movement intensity, reverb, bass).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
+// When it opens, the cover grows out of the mini player and the buttons fade in.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -29,6 +30,34 @@ import { formatTime, parseLyrics, lyricIndexAt } from './utils';
 import * as Engine from './audioEngine';
 import { GlowBackground, GLOW_DEFAULT, GLOW_STYLES, GLOW_COLORS, loadGlow, saveGlow } from './PlayerGlow';
 
+let FS = null;
+try {
+  FS = require('expo-file-system/legacy');
+} catch (e) {
+  try {
+    FS = require('expo-file-system');
+  } catch (e2) {
+    FS = null;
+  }
+}
+if (FS && typeof FS.getInfoAsync !== 'function') FS = null;
+
+async function fileSizeOf(uri) {
+  try {
+    if (!FS) return 0;
+    const i = await FS.getInfoAsync(uri);
+    return i && i.size ? i.size : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function fmtSize(b) {
+  const mb = b / 1048576;
+  if (mb >= 1) return mb.toFixed(mb >= 100 ? 0 : 1) + ' MB';
+  return Math.max(1, Math.round(b / 1024)) + ' KB';
+}
+
 function buildInfoRows(song, d) {
   const rows = [];
   const add = (label, value) => {
@@ -50,6 +79,7 @@ function buildInfoRows(song, d) {
   add('Disc', ed ? song.disc : det.discNumber || song.disc);
   add('Composer', ed ? song.composer : det.composer || song.composer);
   add('Length', song.duration ? formatTime(song.duration) : '');
+  if (d && d._fileSize) add('File size', fmtSize(d._fileSize));
   if (det.bitrate) add('Bitrate', Math.round(det.bitrate / 1000) + ' kbps');
   if (det.sampleRate) add('Sample rate', (det.sampleRate / 1000).toFixed(1) + ' kHz');
   if (det.channelCount) add('Channels', det.channelCount === 1 ? 'Mono' : det.channelCount === 2 ? 'Stereo' : det.channelCount);
@@ -152,7 +182,7 @@ export default function NowPlaying({
   const [verPanel, setVerPanel] = useState(false); // the list of versions (only for .mka bundles)
   const [coverPanel, setCoverPanel] = useState(false); // choose one of the covers inside the song
   const [eset, setEset] = useState(() => Engine.getEightSettings());
-  const [glow, setGlow] = useState(GLOW_DEFAULT); // the glowing background (style, color, intensity, speed)
+  const [glow, setGlow] = useState(GLOW_DEFAULT); // the glowing background (style and color)
   const [glowPanel, setGlowPanel] = useState(false);
   const glowRef = useRef(GLOW_DEFAULT);
 
@@ -168,6 +198,52 @@ export default function NowPlaying({
       alive = false;
     };
   }, []);
+
+  // ----- opening / closing animation: the cover grows out of the mini player and the buttons fade in -----
+  const open = useRef(new Animated.Value(0)).current; // 0 = closed, 1 = open
+  const [coverReady, setCoverReady] = useState(false);
+  const [finalBox, setFinalBox] = useState(null);
+  const pendingOpen = useRef(false);
+  const closing = useRef(false);
+
+  function startOpen() {
+    pendingOpen.current = false;
+    open.stopAnimation();
+    Animated.timing(open, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(({ finished }) => {
+      if (finished) setCoverReady(true);
+    });
+  }
+
+  const requestClose = () => {
+    if (closing.current) return;
+    closing.current = true;
+    setCoverReady(false);
+    open.stopAnimation();
+    Animated.timing(open, { toValue: 0, duration: 260, easing: Easing.in(Easing.cubic), useNativeDriver: true }).start(() => {
+      closing.current = false;
+      onClose();
+    });
+  };
+
+  useEffect(() => {
+    if (!visible) {
+      pendingOpen.current = false;
+      return undefined;
+    }
+    closing.current = false;
+    setCoverReady(false);
+    setFinalBox(null);
+    open.setValue(0);
+    pendingOpen.current = true;
+    const t1 = setTimeout(() => measureCover(), 30);
+    const t2 = setTimeout(() => {
+      if (pendingOpen.current) startOpen(); // safety: start anyway if the cover could not be measured
+    }, 300);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [visible]);
 
   const changeGlow = (patch) => {
     const n = { ...glowRef.current, ...patch };
@@ -256,6 +332,10 @@ export default function NowPlaying({
     if (coverBox.current && coverBox.current.measureInWindow) {
       coverBox.current.measureInWindow((x, y, w, h) => {
         coverRect.current = { x, y, w, h };
+        if (w > 0) {
+          setFinalBox((old) => (old && old.x === x && old.y === y && old.w === w && old.h === h ? old : { x, y, w, h }));
+          if (pendingOpen.current) startOpen();
+        }
       });
     }
   };
@@ -382,13 +462,13 @@ export default function NowPlaying({
     };
   }, [visible, songId, song ? song.lyricsEdit : undefined]);
 
-  // Load technical details when the info page is open
+  // Load technical details (and the file size) when the info page is open
   useEffect(() => {
     if (!visible || page !== 'info' || !song) return undefined;
     let alive = true;
     setDet({ id: song.id, loading: true, data: null });
-    fetchDetails(song.uri).then((d) => {
-      if (alive) setDet({ id: song.id, loading: false, data: d });
+    Promise.all([fetchDetails(song.uri), fileSizeOf(song.uri)]).then(([d, size]) => {
+      if (alive) setDet({ id: song.id, loading: false, data: { ...(d || {}), _fileSize: size } });
     });
     return () => {
       alive = false;
@@ -417,6 +497,37 @@ export default function NowPlaying({
   const infoRows = buildInfoRows(song, det.id === song.id ? det.data : null);
   const lyricsLoading = lyr.id !== songId || lyr.loading;
   const cardOpacity = tx.interpolate({ inputRange: [-width, 0, width], outputRange: [0.15, 1, 0.15], extrapolate: 'clamp' });
+  const bgOp = open.interpolate({ inputRange: [0, 0.6], outputRange: [0, 1], extrapolate: 'clamp' });
+  const contentOp = open.interpolate({ inputRange: [0.3, 1], outputRange: [0, 1], extrapolate: 'clamp' });
+  const contentY = open.interpolate({ inputRange: [0, 1], outputRange: [40, 0] });
+
+  // The cover that flies between the mini player and its place on the player screen
+  let floating = null;
+  if (visible && page === 'player' && !coverReady && finalBox) {
+    const ox = 44; // the mini player's cover (centre)
+    const oy = height - insets.bottom - 40;
+    const cx = finalBox.x + finalBox.w / 2;
+    const cy = finalBox.y + finalBox.h / 2;
+    floating = (
+      <Animated.View
+        pointerEvents="none"
+        style={{
+          position: 'absolute',
+          left: finalBox.x,
+          top: finalBox.y,
+          width: finalBox.w,
+          height: finalBox.h,
+          transform: [
+            { translateX: open.interpolate({ inputRange: [0, 1], outputRange: [ox - cx, 0] }) },
+            { translateY: open.interpolate({ inputRange: [0, 1], outputRange: [oy - cy, 0] }) },
+            { scale: open.interpolate({ inputRange: [0, 1], outputRange: [44 / finalBox.w, 1] }) },
+          ],
+        }}
+      >
+        <Art song={song} size={finalBox.w} radius={28} />
+      </Animated.View>
+    );
+  }
 
   const tabs = [
     { key: 'player', icon: 'image', label: 'Cover' },
@@ -427,17 +538,19 @@ export default function NowPlaying({
   return (
     <Modal
       visible={visible}
-      animationType="slide"
+      animationType="none"
       onRequestClose={() => {
         if (coverPanel) setCoverPanel(false);
         else if (verPanel) setVerPanel(false);
         else if (glowPanel) setGlowPanel(false);
         else if (eightPanel) setEightPanel(false);
-        else onClose();
+        else requestClose();
       }}
       statusBarTranslucent
       navigationBarTranslucent
     >
+      <View style={{ flex: 1 }}>
+      <Animated.View style={{ flex: 1, opacity: bgOp }}>
       <LinearGradient
         colors={[t.accent + '66', t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
@@ -452,11 +565,13 @@ export default function NowPlaying({
           covers={covers}
           pinned={pinnedCover}
           currentTime={currentTime}
+          nudge={page + (glowPanel ? 'g' : '') + (eightPanel ? 'e' : '') + (verPanel ? 'v' : '') + (coverPanel ? 'c' : '')}
         />
 
+        <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }}>
         <View style={s.fullTop}>
           <View style={{ width: 88, flexDirection: 'row' }}>
-            <TouchableOpacity onPress={onClose} style={s.fullTopBtn}>
+            <TouchableOpacity onPress={requestClose} style={s.fullTopBtn}>
               <Ionicons name="chevron-down" size={30} color={t.text} />
             </TouchableOpacity>
           </View>
@@ -502,7 +617,7 @@ export default function NowPlaying({
                 style={{ flex: 1 }}
               >
                 <View style={s.fullArt}>
-                  <View ref={coverBox} collapsable={false} onLayout={measureCover}>
+                  <View ref={coverBox} collapsable={false} onLayout={measureCover} style={{ opacity: coverReady ? 1 : 0 }}>
                     {covers.length >= 2 ? (
                       <CoverShow
                         key={song.id}
@@ -750,6 +865,7 @@ export default function NowPlaying({
             );
           })}
         </View>
+        </Animated.View>
 
         {/* Cover sheet: hold the cover to choose which of the covers inside the song is shown */}
         <CoverSheet
@@ -914,20 +1030,6 @@ export default function NowPlaying({
                     );
                   })}
                 </View>
-
-                <EightSlider
-                  label="Intensity"
-                  value={glow.intensity}
-                  onChange={(v) => changeGlow({ intensity: v })}
-                  disabled={glow.style === 'off'}
-                />
-                <EightSlider
-                  label="Speed"
-                  value={glow.speed}
-                  onChange={(v) => changeGlow({ speed: v })}
-                  disabled={glow.style === 'off'}
-                  note="It moves while the song plays and calms down when you pause."
-                />
               </ScrollView>
             </View>
           </View>
@@ -1064,6 +1166,9 @@ export default function NowPlaying({
           </View>
         ) : null}
       </LinearGradient>
+      </Animated.View>
+      {floating}
+      </View>
     </Modal>
   );
 }
