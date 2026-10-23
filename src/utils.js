@@ -81,6 +81,12 @@ export function sortSongs(songs, key, dir, sizes) {
     g: low(s.genre),
   }));
   arr.sort((x, y) => {
+    if (key === 'added') {
+      // The number the phone gives a file keeps growing with every new file, so a bigger number = a newer file
+      const nx = parseInt(x.s.id, 10);
+      const ny = parseInt(y.s.id, 10);
+      if (nx > 0 && ny > 0 && nx !== ny) return (nx - ny) * mul;
+    }
     const kx = sortKey(x, key, sizes);
     const ky = sortKey(y, key, sizes);
     if (kx === null && ky !== null) return 1;
