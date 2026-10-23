@@ -11,6 +11,8 @@ import {
   Alert,
   useWindowDimensions,
   BackHandler,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -424,6 +426,7 @@ function MusicApp({ settings, updateSettings }) {
       originalRef.current = songList;
       if (settings.shuffle) updateSettings({ shuffle: false });
       playAt(songList, index);
+      setPlayerOpen(true); // the player opens with its cover-grow animation
     },
     [songList, playAt, settings.shuffle, updateSettings]
   );
@@ -434,6 +437,7 @@ function MusicApp({ settings, updateSettings }) {
       originalRef.current = openedGroup.songs;
       if (settings.shuffle) updateSettings({ shuffle: false });
       playAt(openedGroup.songs, index);
+      setPlayerOpen(true);
     },
     [openedGroup, playAt, settings.shuffle, updateSettings]
   );
@@ -589,10 +593,40 @@ function MusicApp({ settings, updateSettings }) {
   const favId = current ? current.bundleId || current.id : null;
 
   // ---------- Slide bar ----------
+  // The search + tabs bar: hides when you scroll down, comes back as soon as you scroll up a little
+  const barY = useRef(new Animated.Value(-400)).current;
+  const barShown = useRef(false);
+  const [barOn, setBarOn] = useState(false);
+  const lastY = useRef(0);
+  const accY = useRef(0);
+  const searchFocus = useRef(false);
+  const setBar = useCallback((on) => {
+    if (barShown.current === on) return;
+    barShown.current = on;
+    setBarOn(on);
+    Animated.timing(barY, { toValue: on ? 0 : -400, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, []);
+  useEffect(() => {
+    setBar(false);
+    lastY.current = 0;
+    accY.current = 0;
+  }, [tab, openGroup]);
+
   const onListScroll = useCallback((e) => {
     const n = e.nativeEvent;
     if (fastRef.current) {
       fastRef.current.update(n.contentOffset.y, n.contentSize.height, n.layoutMeasurement.height);
+    }
+    const y = n.contentOffset.y;
+    const dy = y - lastY.current;
+    lastY.current = y;
+    if (y <= 140) {
+      accY.current = 0;
+      setBar(false); // near the top the normal header is on screen
+    } else if (!searchFocus.current) {
+      accY.current = dy * accY.current > 0 ? accY.current + dy : dy;
+      if (accY.current > 18) setBar(false);
+      else if (accY.current < -18) setBar(true);
     }
   }, []);
 
@@ -922,6 +956,47 @@ function MusicApp({ settings, updateSettings }) {
       <StatusBar barStyle={barStyle} backgroundColor="transparent" translucent />
 
       {body}
+
+      {/* Search + tabs: slides in when you scroll up, slides away when you scroll down */}
+      <Animated.View
+        pointerEvents={barOn ? 'auto' : 'none'}
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: 0,
+          paddingTop: insets.top + 8,
+          paddingBottom: 8,
+          backgroundColor: t.bg,
+          elevation: 6,
+          zIndex: 5,
+          transform: [{ translateY: barY }],
+        }}
+      >
+        <View style={s.searchBox}>
+          <Ionicons name="search" size={18} color={t.muted} />
+          <TextInput
+            style={s.searchInput}
+            placeholder="Search songs, artists, albums"
+            placeholderTextColor={t.muted}
+            value={query}
+            onChangeText={setQuery}
+            autoCorrect={false}
+            onFocus={() => {
+              searchFocus.current = true;
+            }}
+            onBlur={() => {
+              searchFocus.current = false;
+            }}
+          />
+          {query.length > 0 ? (
+            <TouchableOpacity onPress={() => setQuery('')}>
+              <Ionicons name="close-circle" size={18} color={t.muted} />
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        <Segmented items={TABS} value={tab} onChange={setTab} />
+      </Animated.View>
 
       {/* Slide bar on the right edge */}
       <FastScroll ref={fastRef} top={insets.top + 12} bottom={listBottom} onJump={jumpTo} />
