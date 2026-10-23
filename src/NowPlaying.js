@@ -5,8 +5,8 @@
 // (automatic rotation or phone tilt, hall presets, room size, rotation speed, movement intensity, reverb, bass).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
 // When it opens, the cover grows out of the mini player and the buttons fade in.
-// Smooth opening: the Modal is transparent (no white flash), the cover grows first on its own,
-// and the heavy parts (glow background, extra covers, lyrics) are loaded only after the animation ends.
+// Smooth opening: the Modal is transparent (the song list stays visible instead of a white window),
+// the cover grows first on its own, and the heavy parts (animated glow, extra covers, lyrics) load only after it lands.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -144,11 +144,11 @@ function volumeIcon(v) {
   return 'volume-high';
 }
 
-// Fades its children in when it appears (used for the glow, so it does not pop in after the opening animation)
+// Fades its children in when it appears (the glow, so it does not pop in after the opening animation)
 function FadeIn({ children }) {
   const op = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(op, { toValue: 1, duration: 500, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
+    Animated.timing(op, { toValue: 1, duration: 450, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
   }, []);
   return (
     <Animated.View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: op }}>
@@ -229,12 +229,12 @@ export default function NowPlaying({
     Animated.timing(open, { toValue: 1, duration: 420, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start(({ finished }) => {
       if (finished) {
         setCoverReady(true);
-        setHeavy(true); // the animation is done, now the glow, extra covers and lyrics can load
+        setHeavy(true); // the animation is done: now the glow, extra covers and lyrics can load
       }
     });
   }
 
-  // Waits two frames, so the flying cover is really on screen before the animation starts (no stutter at the start)
+  // Waits two frames so the flying cover is really on screen before the animation starts (no stutter at the start)
   function queueOpen() {
     if (startQueued.current) return;
     startQueued.current = true;
@@ -588,7 +588,7 @@ export default function NowPlaying({
       navigationBarTranslucent
     >
       <View style={{ flex: 1 }}>
-      <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: t.bg }} renderToHardwareTextureAndroid={!coverReady}>
+      <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: '#FFFFFF' }} renderToHardwareTextureAndroid={!coverReady}>
       <LinearGradient
         colors={[t.accent + '66', t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
