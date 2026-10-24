@@ -16,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, THEMES } from './theme';
+import { UI_STYLES, splitThemeId, joinThemeId } from './uiStyles';
 import { getCachedArt, loadArt, invalidateArt } from './library';
 import { gradientFor, formatTime, SORT_MODES } from './utils';
 
@@ -369,7 +370,7 @@ export function MiniPlayer({ song, progress, playing, bottom, onOpen, onPrev, on
   );
 }
 
-// ---------- Options sheet: sort, theme, hidden albums, library ----------
+// ---------- Options sheet: sort, style, theme, hidden albums, library ----------
 // It is not a pop-up window. It slides up instantly, closes when you swipe it down or tap outside.
 function Chip({ label, active, onPress, icon }) {
   const { t, s } = useTheme();
@@ -389,6 +390,7 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
   const { t, s } = useTheme();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
+  const parts = splitThemeId(settings.theme); // { ui: look of the app, base: color theme }
 
   const slide = useRef(new Animated.Value(height)).current;
   const fade = useRef(new Animated.Value(0)).current;
@@ -476,12 +478,25 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
               ))}
             </View>
 
+            <Text style={s.sheetTitle}>Style</Text>
+            <View style={s.chipRow}>
+              {UI_STYLES.map((u) => (
+                <Chip
+                  key={u.key}
+                  label={u.label}
+                  icon={u.icon}
+                  active={parts.ui === u.key}
+                  onPress={() => onChange({ theme: joinThemeId(u.key, parts.base) })}
+                />
+              ))}
+            </View>
+
             <Text style={s.sheetTitle}>Theme</Text>
             <View style={s.swatchRow}>
               {THEMES.map((th) => {
-                const on = settings.theme === th.id;
+                const on = parts.base === th.id;
                 return (
-                  <TouchableOpacity key={th.id} style={s.swatchItem} activeOpacity={0.8} onPress={() => onChange({ theme: th.id })}>
+                  <TouchableOpacity key={th.id} style={s.swatchItem} activeOpacity={0.8} onPress={() => onChange({ theme: joinThemeId(parts.ui, th.id) })}>
                     <LinearGradient
                       colors={[th.bgTop, th.bg]}
                       start={{ x: 0, y: 0 }}
