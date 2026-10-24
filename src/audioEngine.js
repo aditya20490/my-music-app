@@ -1,7 +1,7 @@
 // The audio engine. It uses react-native-track-player, which runs a real Android media session
 // (a foreground service + a media notification with previous / play / pause / next / seek).
 // That is the same thing the built-in phone music app uses, and it is what OriginOS turns into the real dynamic island.
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { NativeModules } from 'react-native';
 import TrackPlayer, {
   Capability,
@@ -51,7 +51,8 @@ export function setupAudio() {
         Capability.SeekTo,
       ];
       await TrackPlayer.updateOptions({
-        android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.ContinuePlayback },
+        // swiping the app away from the recent apps screen stops the music and removes the notification
+        android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification },
         capabilities: caps,
         notificationCapabilities: caps,
         progressUpdateEventInterval: 1,
@@ -68,7 +69,7 @@ export function setupAudio() {
 // The native EightD module plays the same file with the 8D effect and follows the normal player.
 const Native = NativeModules ? NativeModules.EightD : null;
 export const eightDSupported = !!Native;
-const eight = { on: false, song: null, volume: 1, playing: true };
+const eight = { on: false, song: null, volume: 1, playing: true, touchedAt: 0 };
 
 // The 8D settings (all sliders go from 0 to 1). mode: 'auto' = keeps rotating, 'tilt' = follows the phone's tilt.
 // bass: 0.5 = normal, 0 = -12 dB, 1 = +12 dB.
@@ -188,6 +189,7 @@ export const player = {
       duration: song.duration > 0 ? song.duration : undefined,
     });
     if (my !== loadId) return;
+    eight.touchedAt = Date.now();
     eight.volume = volume === undefined ? 1 : volume;
     eight.song = song;
     eight.playing = true;
@@ -212,6 +214,7 @@ export const player = {
         eight.playing = s === State.Playing || s === State.Buffering || s === State.Loading;
       } catch (e) {}
       eight.on = true;
+      eight.touchedAt = Date.now();
       try {
         await TrackPlayer.setVolume(0);
       } catch (e) {}
@@ -253,6 +256,7 @@ export const player = {
     TrackPlayer.pause().catch(() => {});
   },
   seekTo(sec) {
+    eight.touchedAt = Date.now();
     if (eight.on && Native) Native.seekTo(Math.max(0, sec) * 1000);
     TrackPlayer.seekTo(sec).catch(() => {});
   },
@@ -278,23 +282,55 @@ export function usePlayerStatus() {
   });
 
   const playingNow = st === State.Playing || st === State.Buffering || st === State.Loading;
-  const posRef = useRef(0);
-  posRef.current = progress.position || 0;
+  // "none" is what the player says for a moment while the app is opening: that is not a pause
+  const stateKnown = st !== undefined && st !== null && st !== State.None;
 
-  // keep the 8D player in step with the main player (system pause / audio focus, small drifts)
+  // The 8D player follows play / pause of the main player (system pause, audio focus, headphones unplugged).
+  // A pause is only passed on if it stays for a moment, so a tiny state flicker can never cut the sound.
   useEffect(() => {
-    if (!eight.on || !Native) return;
-    eight.playing = playingNow;
-    Native.setPlaying(playingNow);
-  }, [playingNow]);
-  useEffect(() => {
-    const id = setInterval(async () => {
+    if (!eight.on || !Native || !stateKnown) return;
+    if (playingNow) {
+      eight.playing = true;
+      Native.setPlaying(true);
+      return;
+    }
+    const t = setTimeout(() => {
       if (!eight.on || !Native) return;
+      eight.playing = false;
+      Native.setPlaying(false);
+    }, 400);
+    return () => clearTimeout(t);
+  }, [playingNow, stateKnown]);
+
+  // The 8D player is the one you HEAR, so it is never moved from here. If the silent main player
+  // (the clock for the bar / notification) drifts away, the silent one is moved, never the audible one.
+  useEffect(() => {
+    let bad = 0;
+    const id = setInterval(async () => {
+      if (!eight.on || !Native || !eight.playing) {
+        bad = 0;
+        return;
+      }
+      if (Date.now() - eight.touchedAt < 4000) {
+        bad = 0;
+        return;
+      }
       try {
         const np = await Native.getPosition();
-        if (np < 0) return;
-        const diff = Math.abs(np / 1000 - posRef.current);
-        if (diff > 0.6) Native.seekTo(posRef.current * 1000);
+        if (np < 0) {
+          bad = 0;
+          return;
+        }
+        const tp = (await TrackPlayer.getProgress()).position || 0;
+        if (Math.abs(np / 1000 - tp) > 1.5) {
+          bad += 1;
+          if (bad >= 2) {
+            bad = 0;
+            await TrackPlayer.seekTo(np / 1000);
+          }
+        } else {
+          bad = 0;
+        }
       } catch (e) {}
     }, 2000);
     return () => clearInterval(id);
