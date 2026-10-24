@@ -157,6 +157,10 @@ function FadeIn({ children }) {
   );
 }
 
+// The lyrics / info lists are laid on top of their area (not inside it), so a long list can never push the
+// seek bar, buttons and tabs off the screen, and it always has the exact height to scroll in.
+const PAGE_FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 };
+
 export default function NowPlaying({
   visible,
   onClose,
@@ -588,7 +592,7 @@ export default function NowPlaying({
       navigationBarTranslucent
     >
       <View style={{ flex: 1 }}>
-      <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: '#FFFFFF' }} renderToHardwareTextureAndroid={!coverReady}>
+      <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: '#FFFFFF' }} renderToHardwareTextureAndroid={page === 'player' && !coverReady}>
       <LinearGradient
         colors={[t.accent + '66', t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
@@ -610,7 +614,7 @@ export default function NowPlaying({
           </FadeIn>
         ) : null}
 
-        <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }} renderToHardwareTextureAndroid={!coverReady}>
+        <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }} renderToHardwareTextureAndroid={page === 'player' && !coverReady}>
         <View style={s.fullTop}>
           <View style={{ width: 88, flexDirection: 'row' }}>
             <TouchableOpacity onPress={requestClose} style={s.fullTopBtn}>
@@ -697,7 +701,7 @@ export default function NowPlaying({
             ) : null}
 
             {page === 'lyrics' ? (
-              lyricsLoading ? (
+              <View style={PAGE_FILL}>{lyricsLoading ? (
                 <View style={s.pageCenter}>
                   <ActivityIndicator color={t.accent} size="large" />
                 </View>
@@ -748,11 +752,11 @@ export default function NowPlaying({
                     );
                   })}
                 </ScrollView>
-              )
+              )}</View>
             ) : null}
 
             {page === 'info' ? (
-              det.loading ? (
+              <View style={PAGE_FILL}>{det.loading ? (
                 <View style={s.pageCenter}>
                   <ActivityIndicator color={t.accent} size="large" />
                 </View>
@@ -766,7 +770,7 @@ export default function NowPlaying({
                   ))}
                   {det.data && det.data._error ? <Text style={s.pageErrorText}>{det.data._error}</Text> : null}
                 </ScrollView>
-              )
+              )}</View>
             ) : null}
           </View>
 
