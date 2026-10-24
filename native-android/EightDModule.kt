@@ -12,6 +12,9 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -22,9 +25,33 @@ import kotlin.math.min
 
 // Bridge to JS. The normal player keeps running (muted) as the clock and media session;
 // this plays the same file with the 8D effect on top.
-class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx) {
+class EightDModule(ctx: ReactApplicationContext) : ReactContextBaseJavaModule(ctx), LifecycleEventListener {
   private var engine: EightDEngine? = null
   private val params = EightDParams()
+  private val main = Handler(Looper.getMainLooper())
+
+  // When the app is swiped away from the recent apps screen the screen (activity) is destroyed and never comes back.
+  // Turning the phone sideways also destroys it, but then a new one opens within a moment. So: wait a little,
+  // and if no screen came back, stop the 8D sound (otherwise it would keep playing with the app gone).
+  private val stopIfGone = Runnable {
+    engine?.release()
+    engine = null
+  }
+
+  init {
+    ctx.addLifecycleEventListener(this)
+  }
+
+  override fun onHostResume() {
+    main.removeCallbacks(stopIfGone)
+  }
+
+  override fun onHostPause() {}
+
+  override fun onHostDestroy() {
+    main.removeCallbacks(stopIfGone)
+    main.postDelayed(stopIfGone, 1500)
+  }
 
   override fun getName(): String = "EightD"
 
