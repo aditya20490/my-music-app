@@ -1,6 +1,6 @@
 // The looks of the app. Every UI style lives in this one file, so adding a new style never means touching the big files again.
-// Options > Style picks the look. Options > Theme still picks the colors.
-// The saved theme is "color" (classic look) or "style:color", for example "neu:blue".
+// Options > Style picks the look. In Classic, Options > Theme picks the colors.
+// The saved theme is "color" (classic look) or "style:color", for example "neu:dark" (the color is ignored by soft styles).
 
 export const UI_STYLES = [
   { key: 'default', label: 'Classic', icon: 'phone-portrait' },
@@ -19,94 +19,83 @@ export function joinThemeId(ui, base) {
   return !ui || ui === 'default' ? base : ui + ':' + base;
 }
 
-// ---------- color helpers ----------
-function hexToRgb(h) {
-  const n = parseInt(String(h).replace('#', ''), 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+// True while a soft white style is on (other parts of the app use it to skip dark effects)
+let ACTIVE = 'default';
+export function isSoftUi() {
+  return ACTIVE !== 'default';
 }
 
-function mix(a, b, k) {
-  const A = hexToRgb(a);
-  const B = hexToRgb(b);
-  const f = (x, y) => ('0' + Math.round(x + (y - x) * k).toString(16)).slice(-2);
-  return '#' + f(A[0], B[0]) + f(A[1], B[1]) + f(A[2], B[2]);
-}
+// ---------- Neumorphism: soft white, raised and pressed-in shapes, one soft blue accent ----------
+const NEU = {
+  id: 'neu',
+  name: 'Neumorphism',
+  isDark: false,
+  bg: '#E6EBF2',
+  bgTop: '#F3F6FB',
+  card: '#EEF2F8',
+  text: '#3A4358',
+  muted: '#8B94A8',
+  accent: '#3D6DF2',
+  accent2: '#6C98FF',
+  track: '#DCE2EC',
+  onAccent: '#FFFFFF',
+};
 
-// ---------- Neumorphism ----------
-// One soft color for everything. Things that stand out have a light edge on the top left and a dark edge on the bottom right.
-// Things that are pressed in (search, tabs, seek bar) are the other way around. The chosen color theme tints the surface.
-function neuColors(t) {
-  const dark = t.isDark;
-  const base = dark ? mix(t.bg, '#9AA0B5', 0.2) : mix(t.bg, '#C8CFDF', 0.55);
-  return {
-    base,
-    hi: dark ? mix(base, '#FFFFFF', 0.09) : '#FFFFFF',
-    lo: dark ? mix(base, '#000000', 0.5) : mix(base, '#7C88A8', 0.5),
-    pit: dark ? mix(base, '#000000', 0.28) : mix(base, '#8E99B5', 0.22),
-  };
-}
+const RAISED = '#F3F6FB'; // the surface of things that stand out
+const PIT = '#DCE2EC'; // the surface of things pressed in
+const SHADOW = '#8F9BB5'; // soft grey-blue shadow
+const ACCENT_SHADOW = '#4A63B8'; // shadow under blue buttons
 
-// Changes the colors of the chosen theme for the chosen style
+// Changes the colors of the chosen style
 export function applyUiTheme(t, ui) {
-  if (ui !== 'neu') return { ...t, ui: 'default' };
-  const c = neuColors(t);
-  return { ...t, ui: 'neu', neu: c, bg: c.base, bgTop: c.base, card: c.base, track: c.pit };
+  ACTIVE = ui;
+  if (ui === 'neu') return { ...NEU, ui: 'neu' };
+  return { ...t, ui: 'default' };
 }
 
-// Changes the shapes and shadows of the chosen style
+// Changes the shapes and shadows of the chosen style.
+// It only uses soft shadows and flat colors (no drawn edges), which keeps the app fast and smooth.
 export function applyUiStyles(t, s) {
   if (t.ui !== 'neu') return s;
-  const { base, hi, lo, pit } = t.neu;
-  const up = (o) => ({
-    backgroundColor: base,
-    borderWidth: 1.5,
-    borderTopColor: hi,
-    borderLeftColor: hi,
-    borderBottomColor: lo,
-    borderRightColor: lo,
-    elevation: 5,
-    shadowColor: lo,
+  const raise = (o) => ({
+    backgroundColor: RAISED,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    elevation: 6,
+    shadowColor: SHADOW,
     ...o,
   });
-  const down = (o) => ({
-    backgroundColor: pit,
-    borderWidth: 1.5,
-    borderTopColor: lo,
-    borderLeftColor: lo,
-    borderBottomColor: hi,
-    borderRightColor: hi,
+  const pit = (o) => ({
+    backgroundColor: PIT,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.75)',
     ...o,
   });
-  // a raised button that keeps its own color (the colored buttons)
-  const glow = {
-    elevation: 7,
-    shadowColor: lo,
-    borderWidth: 1.5,
-    borderTopColor: 'rgba(255,255,255,0.4)',
-    borderLeftColor: 'rgba(255,255,255,0.4)',
-    borderBottomColor: 'rgba(0,0,0,0.25)',
-    borderRightColor: 'rgba(0,0,0,0.25)',
-  };
+  const lift = (o) => ({ elevation: 8, shadowColor: ACCENT_SHADOW, ...o });
   const m = (k, o) => ({ ...s[k], ...o });
   return {
     ...s,
-    headerBtn: m('headerBtn', up()),
-    searchBox: m('searchBox', down()),
-    segment: m('segment', down()),
-    actionButton: m('actionButton', glow),
-    actionButtonDark: m('actionButtonDark', up()),
-    primaryButton: m('primaryButton', glow),
-    rescanButton: m('rescanButton', glow),
-    bigPlay: m('bigPlay', { ...glow, elevation: 10 }),
-    ctrlSmall: m('ctrlSmall', up({ borderRadius: 22, elevation: 4 })),
-    ctrlMid: m('ctrlMid', up({ borderRadius: 26, elevation: 5 })),
-    mini: m('mini', up({ elevation: 10 })),
-    miniProgressBg: m('miniProgressBg', { backgroundColor: pit }),
-    seekTrack: m('seekTrack', { backgroundColor: pit }),
-    seekThumb: m('seekThumb', up({ borderWidth: 1, elevation: 4 })),
-    chip: m('chip', up({ elevation: 3 })),
-    sheet: m('sheet', up({ borderWidth: 0, borderTopWidth: 2, borderTopColor: hi, elevation: 20 })),
-    sheetHandle: m('sheetHandle', { backgroundColor: pit }),
-    infoBox: m('infoBox', down({ borderRadius: 14 })),
+    headerBtn: m('headerBtn', raise({ width: 40, height: 40, borderRadius: 20 })),
+    searchBox: m('searchBox', pit({ borderRadius: 22, height: 44 })),
+    segment: m('segment', pit({ borderRadius: 22, padding: 4 })),
+    segItem: m('segItem', { borderRadius: 18 }),
+    actionButton: m('actionButton', lift({ height: 44, borderRadius: 22 })),
+    actionButtonDark: m('actionButtonDark', raise()),
+    primaryButton: m('primaryButton', lift({ borderRadius: 30 })),
+    rescanButton: m('rescanButton', lift({ borderRadius: 26 })),
+    chip: m('chip', raise({ borderRadius: 20, elevation: 3 })),
+    mini: m('mini', raise({ borderRadius: 24, elevation: 14 })),
+    miniProgressBg: m('miniProgressBg', { backgroundColor: PIT }),
+    seekTrack: m('seekTrack', { height: 8, borderRadius: 4, backgroundColor: PIT }),
+    seekFill: m('seekFill', { height: 8 }),
+    seekThumb: m('seekThumb', raise({ width: 22, height: 22, borderRadius: 11, top: 5, marginLeft: -11, backgroundColor: '#FFFFFF' })),
+    fullTopBtn: m('fullTopBtn', raise({ borderRadius: 22 })),
+    ctrlSmall: m('ctrlSmall', raise({ borderRadius: 22 })),
+    ctrlMid: m('ctrlMid', raise({ borderRadius: 26 })),
+    bigPlay: m('bigPlay', lift({ elevation: 12 })),
+    sheet: m('sheet', raise({ borderWidth: 0, borderTopLeftRadius: 32, borderTopRightRadius: 32, elevation: 24 })),
+    sheetHandle: m('sheetHandle', { backgroundColor: PIT }),
+    sheetBackdrop: m('sheetBackdrop', { backgroundColor: 'rgba(40,50,80,0.35)' }),
+    infoBox: m('infoBox', pit({ borderRadius: 18 })),
   };
 }
