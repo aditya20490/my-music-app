@@ -491,6 +491,8 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
               ))}
             </View>
 
+            {parts.ui === 'default' ? (
+              <>
             <Text style={s.sheetTitle}>Theme</Text>
             <View style={s.swatchRow}>
               {THEMES.map((th) => {
@@ -521,6 +523,10 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
                 );
               })}
             </View>
+              </>
+            ) : (
+              <Text style={s.noteText}>This style has its own soft white look, so it has no color themes. Choose Classic to pick colors.</Text>
+            )}
             <Text style={s.sheetTitle}>Dynamic island</Text>
             <View style={s.chipRow}>
               <Chip label="On" icon="radio-button-on" active={settings.island !== false} onPress={() => onChange({ island: true })} />
