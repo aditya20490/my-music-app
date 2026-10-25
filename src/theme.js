@@ -1,7 +1,6 @@
 // Colors (themes) and all the looks of the app.
 import { createContext, useContext } from 'react';
 import { StyleSheet } from 'react-native';
-import { splitThemeId, applyUiTheme, applyUiStyles } from './uiStyles';
 
 export const THEMES = [
   { id: 'dark', name: 'Dark', isDark: true, bg: '#0B0B10', bgTop: '#2B1F55', card: '#1A1A24', text: '#FFFFFF', muted: '#9A9AA8', accent: '#A78BFA', accent2: '#EC4899', track: '#33333F', onAccent: '#0B0B10' },
@@ -15,11 +14,8 @@ export const THEMES = [
   { id: 'light', name: 'Light', isDark: false, bg: '#F6F6FA', bgTop: '#E2D6FF', card: '#FFFFFF', text: '#111118', muted: '#6B6B7B', accent: '#7C3AED', accent2: '#EC4899', track: '#DADAE4', onAccent: '#FFFFFF' },
 ];
 
-// The saved theme is "color" or "style:color" (for example "neu:dark"). The style changes the whole look of the app.
 export function getTheme(id) {
-  const p = splitThemeId(id);
-  const base = THEMES.find((th) => th.id === p.base) || THEMES[0];
-  return applyUiTheme(base, p.ui);
+  return THEMES.find((th) => th.id === id) || THEMES[0];
 }
 
 export const ThemeContext = createContext({ t: THEMES[0], s: null });
@@ -29,7 +25,7 @@ export function useTheme() {
 }
 
 export function makeStyles(t) {
-  const base = StyleSheet.create({
+  return StyleSheet.create({
     container: { flex: 1, backgroundColor: t.bg },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     centerText: { color: t.muted, fontSize: 15, textAlign: 'center' },
@@ -255,5 +251,4 @@ export function makeStyles(t) {
     },
     rescanText: { color: t.onAccent, fontSize: 15, fontWeight: '800' },
   });
-  return applyUiStyles(t, base);
 }
