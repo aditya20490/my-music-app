@@ -2,7 +2,6 @@
 // 1) the small Android helper (CoverColor.kt) if it is in the build
 // 2) otherwise it reads the JPEG file itself, so it still works without the helper
 import { NativeModules } from 'react-native';
-import { isSoftUi } from './uiStyles';
 
 let FS = null;
 try {
@@ -360,7 +359,6 @@ async function jsColors(uri) {
 
 export function getCoverColors(uri) {
   if (!uri) return Promise.resolve(null);
-  if (isSoftUi()) return Promise.resolve(null); // the soft white styles keep their own colors
   if (cache.has(uri)) return Promise.resolve(cache.get(uri));
   const run = async () => {
     let v = null;
