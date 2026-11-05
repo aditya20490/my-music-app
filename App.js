@@ -11,6 +11,7 @@ import {
   Alert,
   useWindowDimensions,
   BackHandler,
+  AppState,
   Animated,
   Easing,
 } from 'react-native';
@@ -31,7 +32,6 @@ import {
   SongTile,
   GroupTile,
   ArtistRow,
-  Segmented,
   MiniPlayer,
   OptionsSheet,
   ROW_H,
@@ -41,6 +41,10 @@ import EditSong from './src/EditSong';
 import FastScroll from './src/FastScroll';
 import AlbumEditor from './src/AlbumEditor';
 import DynamicIsland from './src/DynamicIsland';
+import * as ForYouStore from './src/foryou/store';
+import * as ForYouEnrich from './src/foryou/enrich';
+import { buildMixes } from './src/foryou/engine';
+import { MixTile, ForYouHeader } from './src/foryou/ForYouUI';
 
 // Lets the phone's media notification / island control the player, even with the screen off
 TrackPlayer.registerPlaybackService(() => Engine.playbackService);
@@ -54,7 +58,32 @@ const TABS = [
   { key: 'albums', label: 'Albums', icon: 'albums' },
   { key: 'artists', label: 'Artists', icon: 'person' },
   { key: 'favs', label: 'Favorites', icon: 'heart' },
+  { key: 'foryou', label: 'For You', icon: 'sparkles' },
 ];
+
+// The tab bar. Text only, so five tabs fit on one line.
+function TabBar({ items, value, onChange }) {
+  const { t, s } = useTheme();
+  return (
+    <View style={s.segment}>
+      {items.map((it) => {
+        const on = value === it.key;
+        return (
+          <TouchableOpacity
+            key={it.key}
+            style={[s.segItem, { paddingHorizontal: 0 }, on && { backgroundColor: t.accent }]}
+            onPress={() => onChange(it.key)}
+            activeOpacity={0.8}
+          >
+            <Text style={[s.segText, { fontSize: 12 }, on && { color: t.onAccent }]} numberOfLines={1}>
+              {it.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
 
 // Mixes a list into a random order. If firstId is given, that song goes first.
 function shuffleList(list, firstId) {
@@ -100,6 +129,9 @@ function MusicApp({ settings, updateSettings }) {
   const [albumEditor, setAlbumEditor] = useState(null); // null, or { id, name, songIds }
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState({});
+  const [forYouStamp, setForYouStamp] = useState(0); // changes each time the For You tab is opened, so the playlists are rebuilt then
+  const [refreshNo, setRefreshNo] = useState(0); // the Refresh button mixes the playlists again
+  const [enrichTick, setEnrichTick] = useState(0); // lets the page show the online learning progress
 
   const originalRef = useRef([]); // the song order before shuffle was turned on
   const scanRef = useRef(0);
@@ -107,6 +139,8 @@ function MusicApp({ settings, updateSettings }) {
   const listRef = useRef(null);
   const fastRef = useRef(null);
   const volumeRef = useRef(1);
+  const favsRef = useRef(new Set());
+  const lastMixRef = useRef(null);
 
   const player = Engine.player;
   const status = Engine.usePlayerStatus();
@@ -123,6 +157,62 @@ function MusicApp({ settings, updateSettings }) {
 
   const queued = currentIndex >= 0 ? queue[currentIndex] : null;
   const current = queued ? songsById[queued.id] || queued : null;
+  favsRef.current = favs;
+
+  // ---------- Learning from your listening (feeds the For You tab; never changes your songs) ----------
+  const listenRef = useRef({ id: null, started: 0, dur: 0, max: 0 });
+  const curKey = current ? current.bundleId || current.id : null;
+  useEffect(() => {
+    const r = listenRef.current;
+    if (r.id && r.id === curKey) {
+      r.max = Math.max(r.max, status.currentTime || 0);
+      if (status.duration > 0) r.dur = status.duration;
+    }
+  }, [status.currentTime]);
+  useEffect(() => {
+    const r = listenRef.current;
+    if (r.id === curKey) return;
+    if (r.id) {
+      // listened to half of it (or a minute) = a play. Left in the first moments = a skip.
+      const dur = r.dur > 0 ? r.dur : 0;
+      if (dur > 0 && (r.max >= Math.min(dur * 0.5, 60) || r.max >= dur - 3)) ForYouStore.recordListen(r.id, 'play', r.started);
+      else if (r.max < Math.min(20, dur * 0.3 || 20)) ForYouStore.recordListen(r.id, 'skip', r.started);
+    }
+    listenRef.current = { id: curKey, started: Date.now(), dur: current ? current.duration || 0 : 0, max: 0 };
+  }, [curKey]);
+
+  // Saves what was learned when the app goes to the background
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st !== 'active') ForYouStore.flushNow();
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Asks the internet about your artists in the background, once songs are read. Skips quietly when offline.
+  useEffect(() => {
+    if (songs.length === 0 || scan) return undefined;
+    const timer = setTimeout(() => {
+      const count = new Map();
+      for (const sg of songs) {
+        const k = ForYouEnrich.artistKeyOf(sg.artist);
+        if (!k) continue;
+        const e = count.get(k);
+        if (e) e.n++;
+        else count.set(k, { name: sg.artist, n: 1 });
+      }
+      const names = Array.from(count.values())
+        .sort((a, b) => b.n - a.n)
+        .map((x) => x.name);
+      ForYouEnrich.enrichArtists(names, () => setEnrichTick((n) => n + 1)).catch(() => {});
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [songs.length, scan === null]);
+
+  // The For You tab is rebuilt every time it is opened
+  useEffect(() => {
+    if (tab === 'foryou') setForYouStamp(Date.now());
+  }, [tab]);
 
   // ---------- Start up ----------
   useEffect(() => {
@@ -138,6 +228,10 @@ function MusicApp({ settings, updateSettings }) {
       } catch (e) {}
       try {
         setSizes(await Sizes.loadSizes());
+      } catch (e) {}
+      try {
+        await ForYouStore.loadForYouData();
+        setRefreshNo(ForYouStore.getMeta().refresh || 0);
       } catch (e) {}
       await Lib.loadCaches();
       await ensurePermission();
@@ -377,11 +471,41 @@ function MusicApp({ settings, updateSettings }) {
     return artists.filter((g) => g.title.toLowerCase().includes(q));
   }, [artists, query]);
 
+  // The For You playlists (worked out from your songs, your listening and what the internet knows about your artists)
+  const mixes = useMemo(() => {
+    if (forYouStamp === 0) return [];
+    try {
+      return buildMixes(songs, favsRef.current, { refresh: refreshNo });
+    } catch (e) {
+      return [];
+    }
+  }, [forYouStamp, songs, refreshNo]);
+
+  useEffect(() => {
+    if (tab === 'foryou' && mixes.length > 0) ForYouStore.markShown(mixes.map((m) => m.mixId));
+  }, [mixes, tab]);
+
+  const visibleMixes = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return mixes;
+    return mixes.filter((m) => m.title.toLowerCase().includes(q) || m.sub.toLowerCase().includes(q));
+  }, [mixes, query]);
+
   const openedGroup = useMemo(() => {
     if (!openGroup) return null;
+    if (openGroup.type === 'mix') {
+      const found = mixes.find((g) => g.key === openGroup.key);
+      if (found) lastMixRef.current = found;
+      return found || (lastMixRef.current && lastMixRef.current.key === openGroup.key ? lastMixRef.current : null);
+    }
     const list = openGroup.type === 'album' ? allGroups : artists;
     return list.find((g) => g.key === openGroup.key) || null;
-  }, [openGroup, allGroups, artists]);
+  }, [openGroup, allGroups, artists, mixes]);
+
+  const refreshMixes = useCallback(() => {
+    setRefreshNo(ForYouStore.bumpRefresh());
+    setForYouStamp(Date.now());
+  }, []);
 
   // ---------- Playback ----------
   const playAt = useCallback(
@@ -722,6 +846,9 @@ function MusicApp({ settings, updateSettings }) {
   );
   const renderArtist = useCallback(({ item }) => <ArtistRow group={item} onPress={openArtist} />, [openArtist]);
 
+  const openMix = useCallback((m) => setOpenGroup({ type: 'mix', key: m.key }), []);
+  const renderMix = useCallback(({ item }) => <MixTile mix={item} size={albumSize} onPress={openMix} />, [albumSize, openMix]);
+
   function selectAllAlbums() {
     const all = {};
     visibleAlbums.forEach((g) => {
@@ -820,7 +947,7 @@ function MusicApp({ settings, updateSettings }) {
         ) : null}
       </View>
 
-      <Segmented items={TABS} value={tab} onChange={setTab} />
+      <TabBar items={TABS} value={tab} onChange={setTab} />
 
       {tab === 'songs' || tab === 'favs' ? (
         <View style={s.actionRow}>
@@ -867,7 +994,19 @@ function MusicApp({ settings, updateSettings }) {
       ) : null}
       {tab === 'albums' ? <Text style={s.noteText}>Long-press an album to select it, then hide it.</Text> : null}
 
+      {tab === 'foryou' ? (
+        <ForYouHeader status={ForYouEnrich.getEnrichStatus()} count={mixes.length} onRefresh={refreshMixes} />
+      ) : null}
+
       {errorText && songs.length > 0 ? <Text style={s.noteText}>{errorText}</Text> : null}
+    </View>
+  );
+
+  const forYouEmpty = (
+    <View style={s.emptyWrap}>
+      <Text style={s.centerText}>
+        {query.trim() !== '' ? 'Nothing matches your search.' : 'Your playlists will appear here once your songs are loaded.'}
+      </Text>
     </View>
   );
 
@@ -905,6 +1044,29 @@ function MusicApp({ settings, updateSettings }) {
         contentContainerStyle={{ paddingBottom: listBottom }}
         ListHeaderComponent={header}
         ListEmptyComponent={emptyBlock}
+      />
+    );
+  } else if (tab === 'foryou') {
+    body = (
+      <FlatList
+        ref={listRef}
+        key="foryou"
+        data={visibleMixes}
+        keyExtractor={(item) => item.key}
+        renderItem={renderMix}
+        numColumns={2}
+        keyboardShouldPersistTaps="handled"
+        columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        windowSize={5}
+        refreshing={false}
+        onRefresh={refreshMixes}
+        onScroll={onListScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingBottom: listBottom }}
+        ListHeaderComponent={header}
+        ListEmptyComponent={forYouEmpty}
       />
     );
   } else if (tab === 'albums') {
@@ -995,7 +1157,7 @@ function MusicApp({ settings, updateSettings }) {
             </TouchableOpacity>
           ) : null}
         </View>
-        <Segmented items={TABS} value={tab} onChange={setTab} />
+        <TabBar items={TABS} value={tab} onChange={setTab} />
       </Animated.View>
 
       {/* Slide bar on the right edge */}
