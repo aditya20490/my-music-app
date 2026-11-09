@@ -532,7 +532,7 @@ export default function NowPlaying({
   if (!song) return null;
 
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
-  const artSize = Math.max(160, Math.min(width - 56, 380, height - 520));
+  const artSize = Math.max(200, Math.min(width - 24, 520, height - 430));
   const infoRows = buildInfoRows(song, det.id === song.id ? det.data : null);
   const lyricsLoading = lyr.id !== songId || lyr.loading;
   const cardOpacity = tx.interpolate({ inputRange: [-width, 0, width], outputRange: [0.15, 1, 0.15], extrapolate: 'clamp' });
@@ -565,7 +565,7 @@ export default function NowPlaying({
           ],
         }}
       >
-        <Art song={song} size={finalBox.w} radius={28} />
+        <Art song={song} size={finalBox.w} radius={4} />
       </Animated.View>
     );
   }
@@ -662,19 +662,19 @@ export default function NowPlaying({
                 delayLongPress={450}
                 style={{ flex: 1 }}
               >
-                <View style={s.fullArt}>
+                <View style={[s.fullArt, { marginHorizontal: -12 }]}>
                   <View ref={coverBox} collapsable={false} onLayout={measureCover} style={{ opacity: coverReady ? 1 : 0 }}>
                     {covers.length >= 2 ? (
                       <CoverShow
                         key={song.id}
                         covers={covers}
                         size={artSize}
-                        radius={28}
+                        radius={4}
                         currentTime={currentTime}
                         pinned={pinnedCover}
                       />
                     ) : (
-                      <Art song={song} size={artSize} radius={28} />
+                      <Art song={song} size={artSize} radius={4} />
                     )}
                   </View>
                 </View>
@@ -774,11 +774,10 @@ export default function NowPlaying({
             ) : null}
           </View>
 
-          {/* Title, artist, album, and the favorite heart */}
+          {/* Title, artist, album on the left. Heart with the 8D button under it on the right. */}
           <View style={s.fullInfo}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 44 }} />
-              <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+              <View style={{ flex: 1, paddingRight: 10, paddingTop: 2 }}>
                 <Text style={s.fullTitle} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>
                   {song.title}
                 </Text>
@@ -787,53 +786,51 @@ export default function NowPlaying({
                   {song.album ? '  •  ' + song.album : ''}
                 </Text>
               </View>
-              <TouchableOpacity
-                onPress={onToggleFav}
-                style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Ionicons name={isFav ? 'heart' : 'heart-outline'} size={28} color={isFav ? t.accent : t.text} />
-              </TouchableOpacity>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 6 }}>
-              <Text style={s.fullSub}>
-                {index + 1} of {total}
-              </Text>
-              <TouchableOpacity
-                onPress={onToggleEightD}
-                activeOpacity={0.8}
-                style={{
-                  marginLeft: 14,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  paddingHorizontal: 12,
-                  paddingVertical: 5,
-                  borderRadius: 16,
-                  borderWidth: 1.5,
-                  borderColor: eightD ? t.accent : t.muted,
-                  backgroundColor: eightD ? t.accent : 'transparent',
-                }}
-              >
-                <Ionicons name="headset" size={15} color={eightD ? '#fff' : t.muted} />
-                <Text style={{ marginLeft: 5, fontSize: 13, fontWeight: '800', color: eightD ? '#fff' : t.muted }}>8D</Text>
-              </TouchableOpacity>
-              {eightD ? (
+              <View style={{ alignItems: 'flex-end' }}>
                 <TouchableOpacity
-                  onPress={() => setEightPanel(true)}
-                  activeOpacity={0.8}
-                  style={{
-                    marginLeft: 8,
-                    width: 32,
-                    height: 32,
-                    borderRadius: 16,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    borderWidth: 1.5,
-                    borderColor: t.accent,
-                  }}
+                  onPress={onToggleFav}
+                  style={{ width: 44, height: 40, alignItems: 'center', justifyContent: 'center' }}
                 >
-                  <Ionicons name="options" size={17} color={t.accent} />
+                  <Ionicons name={isFav ? 'heart' : 'heart-outline'} size={28} color={isFav ? t.accent : t.text} />
                 </TouchableOpacity>
-              ) : null}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                  {eightD ? (
+                    <TouchableOpacity
+                      onPress={() => setEightPanel(true)}
+                      activeOpacity={0.8}
+                      style={{
+                        marginRight: 6,
+                        width: 30,
+                        height: 30,
+                        borderRadius: 15,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderWidth: 1.5,
+                        borderColor: t.accent,
+                      }}
+                    >
+                      <Ionicons name="options" size={16} color={t.accent} />
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    onPress={onToggleEightD}
+                    activeOpacity={0.8}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: 10,
+                      paddingVertical: 4,
+                      borderRadius: 15,
+                      borderWidth: 1.5,
+                      borderColor: eightD ? t.accent : t.muted,
+                      backgroundColor: eightD ? t.accent : 'transparent',
+                    }}
+                  >
+                    <Ionicons name="headset" size={14} color={eightD ? '#fff' : t.muted} />
+                    <Text style={{ marginLeft: 4, fontSize: 12, fontWeight: '800', color: eightD ? '#fff' : t.muted }}>8D</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
             {versions && versions.length > 1 ? (
               <View style={{ alignItems: 'center', marginTop: 10 }}>
