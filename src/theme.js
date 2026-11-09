@@ -2,20 +2,33 @@
 import { createContext, useContext } from 'react';
 import { StyleSheet } from 'react-native';
 
+// Themes.
+// Dark       = soft black (#121212) with white text and white buttons, no color tint
+// Black      = pure #000000 (on an OLED / AMOLED screen the pixels turn completely off), white text and buttons
+// Red ... Purple = dark themes with a colored accent
+// Light      = white mode
+const colorTheme = (id, name, bg, bgTop, card, muted, track, accent, accent2) => ({
+  id, name, isDark: true, bg, bgTop, card, text: '#FFFFFF', muted, accent, accent2, track, onAccent: '#FFFFFF',
+});
+
 export const THEMES = [
-  { id: 'dark', name: 'Dark', isDark: true, bg: '#0B0B10', bgTop: '#2B1F55', card: '#1A1A24', text: '#FFFFFF', muted: '#9A9AA8', accent: '#A78BFA', accent2: '#EC4899', track: '#33333F', onAccent: '#0B0B10' },
-  { id: 'amoled', name: 'Black', isDark: true, bg: '#000000', bgTop: '#062A33', card: '#111114', text: '#FFFFFF', muted: '#8E8E99', accent: '#22D3EE', accent2: '#6366F1', track: '#2A2A30', onAccent: '#000000' },
-  { id: 'red', name: 'Red', isDark: true, bg: '#1C0508', bgTop: '#6B0F1E', card: '#3A111A', text: '#FFFFFF', muted: '#C49A9F', accent: '#FF4D5E', accent2: '#FF8A3D', track: '#5C2230', onAccent: '#FFFFFF' },
-  { id: 'pink', name: 'Pink', isDark: true, bg: '#220718', bgTop: '#7A1850', card: '#471331', text: '#FFFFFF', muted: '#C99BB8', accent: '#FF6FB5', accent2: '#C084FC', track: '#64214A', onAccent: '#2A0618' },
-  { id: 'blue', name: 'Blue', isDark: true, bg: '#050F26', bgTop: '#123C86', card: '#0F2859', text: '#FFFFFF', muted: '#9FB0D0', accent: '#4DA3FF', accent2: '#22D3EE', track: '#25427A', onAccent: '#04122B' },
-  { id: 'green', name: 'Green', isDark: true, bg: '#04180C', bgTop: '#0F6638', card: '#0D3F24', text: '#FFFFFF', muted: '#9CBBA9', accent: '#34D67A', accent2: '#14B8A6', track: '#1F5A39', onAccent: '#03150A' },
-  { id: 'orange', name: 'Orange', isDark: true, bg: '#1E0F03', bgTop: '#7A3D08', card: '#47260B', text: '#FFFFFF', muted: '#C9AE95', accent: '#FF9A3D', accent2: '#FACC15', track: '#6B4220', onAccent: '#1E0F03' },
-  { id: 'purple', name: 'Purple', isDark: true, bg: '#10052B', bgTop: '#4A1C9A', card: '#2B1259', text: '#FFFFFF', muted: '#B2A3D0', accent: '#B27CFF', accent2: '#6C7BFF', track: '#463078', onAccent: '#10052B' },
-  { id: 'light', name: 'Light', isDark: false, bg: '#F6F6FA', bgTop: '#E2D6FF', card: '#FFFFFF', text: '#111118', muted: '#6B6B7B', accent: '#7C3AED', accent2: '#EC4899', track: '#DADAE4', onAccent: '#FFFFFF' },
+  { id: 'dark', name: 'Dark', isDark: true, bg: '#121212', bgTop: '#1E1E1E', card: '#1F1F1F', text: '#FFFFFF', muted: '#A0A0A0', accent: '#FFFFFF', accent2: '#E6E6E6', track: '#3A3A3A', onAccent: '#121212' },
+  { id: 'black', name: 'Black', isDark: true, bg: '#000000', bgTop: '#000000', card: '#0E0E0E', text: '#FFFFFF', muted: '#8A8A8A', accent: '#FFFFFF', accent2: '#E6E6E6', track: '#2A2A2A', onAccent: '#000000' },
+  colorTheme('red', 'Red', '#1A0B0E', '#2A1015', '#2A1519', '#B09A9E', '#4A2A30', '#FF4D5E', '#FF7A87'),
+  colorTheme('pink', 'Pink', '#1A0B14', '#2A1022', '#2A1523', '#B09AA8', '#4A2A40', '#FF6EB4', '#FF94C8'),
+  colorTheme('blue', 'Blue', '#0A1424', '#0F1E38', '#13213A', '#9AA8BE', '#2A3E5E', '#4C9AFF', '#7AB4FF'),
+  colorTheme('green', 'Green', '#0A1A12', '#0F2A1C', '#132A1E', '#9AB0A4', '#2A4A38', '#34D17A', '#62E09A'),
+  colorTheme('orange', 'Orange', '#1A1108', '#2A1A0C', '#2A1D12', '#B0A49A', '#4A3620', '#FF9A3C', '#FFB466'),
+  colorTheme('purple', 'Purple', '#140B24', '#1F1038', '#221339', '#A89ABE', '#3E2A5E', '#B07CFF', '#C8A0FF'),
+  { id: 'light', name: 'Light', isDark: false, bg: '#FFFFFF', bgTop: '#F4F4F4', card: '#F1F1F1', text: '#111111', muted: '#6B6B6B', accent: '#111111', accent2: '#2A2A2A', track: '#D9D9D9', onAccent: '#FFFFFF' },
 ];
 
+// Themes saved by older versions now point to the closest one
+const LEGACY = { amoled: 'black', google: 'dark' };
+
 export function getTheme(id) {
-  return THEMES.find((th) => th.id === id) || THEMES[0];
+  const key = LEGACY[id] || id;
+  return THEMES.find((th) => th.id === key) || THEMES[0];
 }
 
 export const ThemeContext = createContext({ t: THEMES[0], s: null });
@@ -89,7 +102,7 @@ export function makeStyles(t) {
     },
     actionButtonDark: { backgroundColor: t.card },
     actionText: { color: t.text, fontSize: 14, fontWeight: '700' },
-    actionTextWhite: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+    actionTextWhite: { color: t.onAccent, fontSize: 14, fontWeight: '700' },
     primaryButton: {
       marginTop: 28,
       backgroundColor: t.accent,
