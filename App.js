@@ -958,7 +958,7 @@ function MusicApp({ settings, updateSettings }) {
               end={{ x: 1, y: 0 }}
               style={s.actionButton}
             >
-              <Ionicons name="play" size={18} color="#fff" />
+              <Ionicons name="play" size={18} color={t.onAccent} />
               <Text style={s.actionTextWhite}>Play all</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -986,7 +986,7 @@ function MusicApp({ settings, updateSettings }) {
               end={{ x: 1, y: 0 }}
               style={s.actionButton}
             >
-              <Ionicons name="add" size={20} color="#fff" />
+              <Ionicons name="add" size={20} color={t.onAccent} />
               <Text style={s.actionTextWhite}>New album</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -1267,7 +1267,7 @@ function MusicApp({ settings, updateSettings }) {
                       end={{ x: 1, y: 0 }}
                       style={s.actionButton}
                     >
-                      <Ionicons name="play" size={18} color="#fff" />
+                      <Ionicons name="play" size={18} color={t.onAccent} />
                       <Text style={s.actionTextWhite}>Play</Text>
                     </LinearGradient>
                   </TouchableOpacity>
@@ -1404,7 +1404,7 @@ function Root() {
   }, []);
 
   if (!settings) {
-    return <View style={{ flex: 1, backgroundColor: '#0B0B10' }} />;
+    return <View style={{ flex: 1, backgroundColor: '#121212' }} />;
   }
 
   return (
