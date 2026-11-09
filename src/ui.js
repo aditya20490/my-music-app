@@ -15,7 +15,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, THEMES } from './theme';
+import { useTheme, THEMES, getTheme } from './theme';
 import { getCachedArt, loadArt, invalidateArt } from './library';
 import { gradientFor, formatTime, SORT_MODES } from './utils';
 
@@ -479,14 +479,20 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
             <Text style={s.sheetTitle}>Theme</Text>
             <View style={s.swatchRow}>
               {THEMES.map((th) => {
-                const on = settings.theme === th.id;
+                const on = getTheme(settings.theme).id === th.id;
                 return (
                   <TouchableOpacity key={th.id} style={s.swatchItem} activeOpacity={0.8} onPress={() => onChange({ theme: th.id })}>
-                    <LinearGradient
-                      colors={[th.bgTop, th.bg]}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={[s.swatch, { borderColor: on ? t.text : th.accent }]}
+                    <View
+                      style={[
+                        s.swatch,
+                        {
+                          backgroundColor: th.bg,
+                          borderColor: on ? t.text : t.track,
+                          borderWidth: on ? 3 : 1.5,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        },
+                      ]}
                     >
                       <View
                         style={{
@@ -500,7 +506,7 @@ export function OptionsSheet({ onClose, settings, sortMode, onChange, info, onRe
                       >
                         {on ? <Ionicons name="checkmark" size={15} color={th.onAccent} /> : null}
                       </View>
-                    </LinearGradient>
+                    </View>
                     <Text style={[s.swatchName, on && { color: t.text }]}>{th.name}</Text>
                   </TouchableOpacity>
                 );
