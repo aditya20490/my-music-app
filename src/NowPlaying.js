@@ -594,7 +594,7 @@ export default function NowPlaying({
       <View style={{ flex: 1 }}>
       <Animated.View style={{ flex: 1, opacity: bgOp, backgroundColor: '#FFFFFF' }} renderToHardwareTextureAndroid={page === 'player' && !coverReady}>
       <LinearGradient
-        colors={[t.accent + '66', t.bg, t.bg]}
+        colors={[t.bgTop, t.bg, t.bg]}
         style={[s.full, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 16 }]}
       >
         {/* The glowing background: behind everything, never blocks touches. It loads after the opening animation and fades in. */}
@@ -826,8 +826,8 @@ export default function NowPlaying({
                       backgroundColor: eightD ? t.accent : 'transparent',
                     }}
                   >
-                    <Ionicons name="headset" size={14} color={eightD ? '#fff' : t.muted} />
-                    <Text style={{ marginLeft: 4, fontSize: 12, fontWeight: '800', color: eightD ? '#fff' : t.muted }}>8D</Text>
+                    <Ionicons name="headset" size={14} color={eightD ? t.onAccent : t.muted} />
+                    <Text style={{ marginLeft: 4, fontSize: 12, fontWeight: '800', color: eightD ? t.onAccent : t.muted }}>8D</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -883,7 +883,7 @@ export default function NowPlaying({
               <Ionicons
                 name={playing ? 'pause' : 'play'}
                 size={38}
-                color="#fff"
+                color={t.onAccent}
                 style={playing ? null : { marginLeft: 4 }}
               />
             </LinearGradient>
