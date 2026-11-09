@@ -36,8 +36,8 @@ try {
   AS = null;
 }
 
-// Songs shorter than this (in seconds) are hidden, so ringtones don't show up.
-const MIN_SECONDS = 30;
+// Songs shorter than this (in seconds) are hidden. 0 means every audio file on the phone is shown, even short clips.
+const MIN_SECONDS = 0;
 
 export const META_AVAILABLE = !!Meta;
 
