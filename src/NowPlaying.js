@@ -4,6 +4,7 @@
 // The 8D pill turns the 8D effect on / off. The slider button next to it opens the 8D settings
 // (automatic rotation or phone tilt, hall presets, room size, rotation speed, movement intensity, reverb, bass).
 // If the song has lyrics: swipe up anywhere except on the cover opens the lyrics.
+// On the lyrics page, double tap the lyrics = Spotify-style full screen lyrics (only the seek bar and play / pause stay). Double tap again = back.
 // When it opens, the cover grows out of the mini player and the buttons fade in.
 // Smooth opening: the Modal is transparent (the song list stays visible instead of a white window),
 // the cover grows first on its own, and the heavy parts (animated glow, extra covers, lyrics) load only after it lands.
@@ -157,6 +158,30 @@ function FadeIn({ children }) {
   );
 }
 
+// Full screen lyrics (double tap): the lines are left aligned like Spotify. Change 'left' to 'center' for centered lines.
+const LYRIC_ALIGN = 'left';
+const LYRIC_ZOOM = 1.1; // the line that is being sung grows to this size
+
+// One lyric line in full screen mode. The line that is being sung zooms in a little.
+function ZoomLine({ on, children }) {
+  const sc = useRef(new Animated.Value(on ? LYRIC_ZOOM : 1)).current;
+  useEffect(() => {
+    Animated.timing(sc, { toValue: on ? LYRIC_ZOOM : 1, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }, [on]);
+  return (
+    <Animated.View
+      style={{
+        paddingRight: LYRIC_ALIGN === 'left' ? '10%' : 0,
+        paddingHorizontal: LYRIC_ALIGN === 'left' ? 0 : '5%',
+        transform: [{ scale: sc }],
+        transformOrigin: LYRIC_ALIGN === 'left' ? 'left center' : 'center',
+      }}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
 // The lyrics / info lists are laid on top of their area (not inside it), so a long list can never push the
 // seek bar, buttons and tabs off the screen, and it always has the exact height to scroll in.
 const PAGE_FILL = { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 };
@@ -192,6 +217,7 @@ export default function NowPlaying({
   const { width, height } = useWindowDimensions();
 
   const [page, setPage] = useState('player'); // player | lyrics | info
+  const [lyrFull, setLyrFull] = useState(false); // Spotify-style full screen lyrics (double tap the lyrics)
   const [lyr, setLyr] = useState({ id: null, loading: false, text: '', error: '' });
   const [det, setDet] = useState({ id: null, loading: false, data: null });
   const [vol, setVol] = useState(typeof volume === 'number' ? volume : 1);
@@ -322,6 +348,9 @@ export default function NowPlaying({
   };
   const scrollRef = useRef(null);
   const lineY = useRef({});
+  const lyrH = useRef(0); // height of the lyrics area
+  const lastLyrTap = useRef(0);
+  const lyrTapTimer = useRef(null);
 
   // ----- gesture bookkeeping (refs, so the gesture code always sees fresh values) -----
   const tx = useRef(new Animated.Value(0)).current; // the card slides with this
@@ -520,14 +549,52 @@ export default function NowPlaying({
   hasLyricsRef.current = hasLyrics;
   const activeLine = parsed.synced ? lyricIndexAt(parsed.lines, currentTime) : -1;
 
-  // Keep the current synced lyric line in view
-  useEffect(() => {
+  // Keep the current synced lyric line in view (in full screen it sits a bit higher, like Spotify)
+  const scrollToActive = (animated) => {
     if (page !== 'lyrics' || activeLine < 0 || !scrollRef.current) return;
     const y = lineY.current[activeLine];
     if (typeof y === 'number') {
-      scrollRef.current.scrollTo({ y: Math.max(0, y - 140), animated: true });
+      const above = lyrFull && lyrH.current > 0 ? lyrH.current * 0.28 : 140;
+      scrollRef.current.scrollTo({ y: Math.max(0, y - above), animated: animated });
     }
+  };
+  useEffect(() => {
+    scrollToActive(true);
   }, [activeLine, page]);
+
+  // Full screen on / off: the lines change size, so wait a moment and then put the current line in place
+  useEffect(() => {
+    const id = setTimeout(() => scrollToActive(false), 120);
+    return () => clearTimeout(id);
+  }, [lyrFull]);
+
+  // Full screen only lives on the lyrics page, and only while the song has lyrics
+  const lyricsReady = lyr.id === songId && !lyr.loading;
+  useEffect(() => {
+    if (!visible || page !== 'lyrics' || (lyricsReady && !hasLyrics)) setLyrFull(false);
+  }, [visible, page, lyricsReady, hasLyrics]);
+
+  // Double tap the lyrics = full screen on / off. A single tap still jumps to that line (after a short wait).
+  const onLyricTap = (line) => {
+    const now = Date.now();
+    if (now - lastLyrTap.current < 320) {
+      lastLyrTap.current = 0;
+      if (lyrTapTimer.current) {
+        clearTimeout(lyrTapTimer.current);
+        lyrTapTimer.current = null;
+      }
+      setLyrFull((v) => !v);
+      return;
+    }
+    lastLyrTap.current = now;
+    if (parsed.synced) {
+      if (lyrTapTimer.current) clearTimeout(lyrTapTimer.current);
+      lyrTapTimer.current = setTimeout(() => {
+        lyrTapTimer.current = null;
+        onSeek(line.t);
+      }, 320);
+    }
+  };
 
   if (!song) return null;
 
@@ -570,6 +637,14 @@ export default function NowPlaying({
     );
   }
 
+  const playBtn = (
+    <TouchableOpacity onPress={onTogglePlay} activeOpacity={0.85}>
+      <LinearGradient colors={[t.accent, t.accent2]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={s.bigPlay}>
+        <Ionicons name={playing ? 'pause' : 'play'} size={38} color={t.onAccent} style={playing ? null : { marginLeft: 4 }} />
+      </LinearGradient>
+    </TouchableOpacity>
+  );
+
   const tabs = [
     { key: 'player', icon: 'image', label: 'Cover' },
     { key: 'lyrics', icon: 'document-text', label: 'Lyrics' },
@@ -582,7 +657,8 @@ export default function NowPlaying({
       transparent
       animationType="none"
       onRequestClose={() => {
-        if (coverPanel) setCoverPanel(false);
+        if (lyrFull) setLyrFull(false);
+        else if (coverPanel) setCoverPanel(false);
         else if (verPanel) setVerPanel(false);
         else if (glowPanel) setGlowPanel(false);
         else if (eightPanel) setEightPanel(false);
@@ -615,6 +691,7 @@ export default function NowPlaying({
         ) : null}
 
         <Animated.View style={{ flex: 1, opacity: contentOp, transform: [{ translateY: contentY }] }} renderToHardwareTextureAndroid={page === 'player' && !coverReady}>
+        {!lyrFull ? (
         <View style={s.fullTop}>
           <View style={{ width: 88, flexDirection: 'row' }}>
             <TouchableOpacity onPress={requestClose} style={s.fullTopBtn}>
@@ -648,6 +725,7 @@ export default function NowPlaying({
             )}
           </View>
         </View>
+        ) : null}
 
         {/* The card: cover / lyrics / info plus the song name. It slides when you swipe left or right. */}
         <Animated.View style={{ flex: 1, opacity: cardOpacity, transform: [{ translateX: tx }] }} {...pan.panHandlers}>
@@ -701,7 +779,7 @@ export default function NowPlaying({
             ) : null}
 
             {page === 'lyrics' ? (
-              <View style={PAGE_FILL}>{lyricsLoading ? (
+              <View style={PAGE_FILL} onLayout={(e) => { lyrH.current = e.nativeEvent.layout.height; }}>{lyricsLoading ? (
                 <View style={s.pageCenter}>
                   <ActivityIndicator color={t.accent} size="large" />
                 </View>
@@ -712,7 +790,11 @@ export default function NowPlaying({
                   {lyr.error ? <Text style={s.pageErrorText}>{lyr.error}</Text> : null}
                 </View>
               ) : (
-                <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} contentContainerStyle={s.lyricsContent}>
+                <ScrollView
+                  ref={scrollRef}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={[s.lyricsContent, lyrFull && { paddingTop: 30, paddingBottom: Math.round(height * 0.5), paddingHorizontal: 4 }]}
+                >
                   {parsed.lines.map((line, i) => {
                     const on = parsed.synced && i === activeLine;
                     const wordMode = on && line.words && line.words.length > 0;
@@ -720,34 +802,61 @@ export default function NowPlaying({
                       <TouchableOpacity
                         key={i}
                         activeOpacity={parsed.synced ? 0.6 : 1}
-                        onPress={() => {
-                          if (parsed.synced) onSeek(line.t);
-                        }}
+                        onPress={() => onLyricTap(line)}
                         onLayout={(e) => {
                           lineY.current[i] = e.nativeEvent.layout.y;
                         }}
                       >
-                        <Text
-                          style={[
-                            s.lyricLine,
-                            parsed.synced && !on && s.lyricLineDim,
-                            on && !wordMode && { color: t.accent, fontWeight: '800' },
-                            on && wordMode && { fontWeight: '800' },
-                          ]}
-                        >
-                          {wordMode
-                            ? line.words.map((w, wi) => {
-                                const sung = currentTime + 0.05 >= w.t;
-                                return (
-                                  <Text key={wi} style={{ color: sung ? t.accent : t.text, opacity: sung ? 1 : 0.55 }}>
-                                    {w.text}
-                                  </Text>
-                                );
-                              })
-                            : line.text === ''
-                            ? ' '
-                            : line.text}
-                        </Text>
+                        {lyrFull ? (
+                          <ZoomLine on={on}>
+                            <Text
+                              style={{
+                                color: t.text,
+                                fontSize: 28,
+                                lineHeight: 36,
+                                fontWeight: '800',
+                                textAlign: LYRIC_ALIGN,
+                                paddingVertical: 8,
+                                opacity: parsed.synced && !on ? 0.4 : 1,
+                              }}
+                            >
+                              {wordMode
+                                ? line.words.map((w, wi) => {
+                                    const sung = currentTime + 0.05 >= w.t;
+                                    return (
+                                      <Text key={wi} style={{ opacity: sung ? 1 : 0.45 }}>
+                                        {w.text}
+                                      </Text>
+                                    );
+                                  })
+                                : line.text === ''
+                                ? ' '
+                                : line.text}
+                            </Text>
+                          </ZoomLine>
+                        ) : (
+                          <Text
+                            style={[
+                              s.lyricLine,
+                              parsed.synced && !on && s.lyricLineDim,
+                              on && !wordMode && { color: t.accent, fontWeight: '800' },
+                              on && wordMode && { fontWeight: '800' },
+                            ]}
+                          >
+                            {wordMode
+                              ? line.words.map((w, wi) => {
+                                  const sung = currentTime + 0.05 >= w.t;
+                                  return (
+                                    <Text key={wi} style={{ color: sung ? t.accent : t.text, opacity: sung ? 1 : 0.55 }}>
+                                      {w.text}
+                                    </Text>
+                                  );
+                                })
+                              : line.text === ''
+                              ? ' '
+                              : line.text}
+                          </Text>
+                        )}
                       </TouchableOpacity>
                     );
                   })}
@@ -775,6 +884,7 @@ export default function NowPlaying({
           </View>
 
           {/* Title, artist, album on the left. Heart with the 8D button under it on the right. */}
+          {!lyrFull ? (
           <View style={s.fullInfo}>
             <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
               <View style={{ flex: 1, paddingRight: 10, paddingTop: 2 }}>
@@ -856,6 +966,7 @@ export default function NowPlaying({
               </View>
             ) : null}
           </View>
+          ) : null}
         </Animated.View>
 
         <View style={s.fullSeek}>
@@ -866,6 +977,9 @@ export default function NowPlaying({
           </View>
         </View>
 
+        {lyrFull ? (
+          <View style={[s.controls, { justifyContent: 'center' }]}>{playBtn}</View>
+        ) : (
         <View style={s.controls}>
           <TouchableOpacity onPress={onToggleShuffle} style={s.ctrlSmall}>
             <Ionicons name="shuffle" size={26} color={shuffle ? t.accent : t.muted} />
@@ -873,21 +987,7 @@ export default function NowPlaying({
           <TouchableOpacity onPress={onPrev} style={s.ctrlMid}>
             <Ionicons name="play-skip-back" size={34} color={t.text} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={onTogglePlay} activeOpacity={0.85}>
-            <LinearGradient
-              colors={[t.accent, t.accent2]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={s.bigPlay}
-            >
-              <Ionicons
-                name={playing ? 'pause' : 'play'}
-                size={38}
-                color={t.onAccent}
-                style={playing ? null : { marginLeft: 4 }}
-              />
-            </LinearGradient>
-          </TouchableOpacity>
+          {playBtn}
           <TouchableOpacity onPress={onNext} style={s.ctrlMid}>
             <Ionicons name="play-skip-forward" size={34} color={t.text} />
           </TouchableOpacity>
@@ -896,7 +996,9 @@ export default function NowPlaying({
             {repeat === 'one' ? <Text style={[s.repeatOne, { color: t.accent }]}>1</Text> : null}
           </TouchableOpacity>
         </View>
+        )}
 
+        {!lyrFull ? (
         <View style={s.pageTabs}>
           {tabs.map((tab) => {
             const on = page === tab.key;
@@ -908,6 +1010,7 @@ export default function NowPlaying({
             );
           })}
         </View>
+        ) : null}
         </Animated.View>
 
         {/* Cover sheet: hold the cover to choose which of the covers inside the song is shown */}
