@@ -1,4 +1,4 @@
-// Several covers inside one song file: the player changes between them by itself every 20 seconds
+// Several covers inside one song file: the player changes between them by itself every 7 seconds
 // (following the song's own time, so pause / seek keep it in step) and you can hold the cover to choose one.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, Image, Animated, TouchableOpacity, ScrollView, StyleSheet, useWindowDimensions } from 'react-native';
@@ -7,7 +7,7 @@ import { useTheme } from './theme';
 import { extractAllEmbeddedArt } from './embeddedArt';
 import { getEditCover } from './edits';
 
-export const COVER_SECONDS = 20;
+export const COVER_SECONDS = 7;
 
 let AS = null;
 try {
