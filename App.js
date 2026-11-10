@@ -709,6 +709,35 @@ function MusicApp({ settings, updateSettings }) {
     updateSettings({ view: v === 'list' ? 'grid3' : 'list' });
   }
 
+  // Two-finger squeeze (zoom out) = 3 columns -> 4 columns, spread = back to 3
+  const pinchRef = useRef({ d: 0, done: false });
+  function pinchDist(touches) {
+    const dx = touches[0].pageX - touches[1].pageX;
+    const dy = touches[0].pageY - touches[1].pageY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function onPinchStart(e) {
+    const touches = e.nativeEvent.touches;
+    if (touches && touches.length === 2) pinchRef.current = { d: pinchDist(touches), done: false };
+  }
+  function onPinchMove(e) {
+    const touches = e.nativeEvent.touches;
+    const pr = pinchRef.current;
+    if (!touches || touches.length !== 2 || !pr.d || pr.done) return;
+    const ratio = pinchDist(touches) / pr.d;
+    if (ratio < 0.8 && settings.view === 'grid3') {
+      pr.done = true;
+      updateSettings({ view: 'grid4' });
+    } else if (ratio > 1.25 && settings.view === 'grid4') {
+      pr.done = true;
+      updateSettings({ view: 'grid3' });
+    }
+  }
+  function onPinchEnd(e) {
+    const touches = e.nativeEvent.touches;
+    if (!touches || touches.length < 2) pinchRef.current = { d: 0, done: false };
+  }
+
   const duration = status.duration || (current ? current.duration : 0) || 0;
   const progress = duration > 0 ? Math.min(1, status.currentTime / duration) : 0;
   const currentId = current ? current.bundleId || current.id : null; // a playing version lights up its bundle's row
@@ -760,7 +789,7 @@ function MusicApp({ settings, updateSettings }) {
 
   // ---------- Layout numbers ----------
   const gridMode = tab === 'songs' && settings.view !== 'list';
-  const columns = gridMode ? 3 : 1;
+  const columns = gridMode ? (settings.view === 'grid4' ? 4 : 3) : 1;
   const tileSize = Math.floor((width - GRID_GAP * (columns - 1)) / columns);
   const albumSize = Math.floor((width - PAD * 2 - GAP) / 2);
   const listBottom = (current ? 96 : 24) + insets.bottom;
@@ -1023,6 +1052,7 @@ function MusicApp({ settings, updateSettings }) {
     );
   } else if (tab === 'songs' || tab === 'favs') {
     body = (
+      <View style={{ flex: 1 }} onTouchStart={onPinchStart} onTouchMove={onPinchMove} onTouchEnd={onPinchEnd} onTouchCancel={onPinchEnd}>
       <FlatList
         ref={listRef}
         key={'songs-' + tab + '-' + columns}
@@ -1045,6 +1075,7 @@ function MusicApp({ settings, updateSettings }) {
         ListHeaderComponent={header}
         ListEmptyComponent={emptyBlock}
       />
+      </View>
     );
   } else if (tab === 'foryou') {
     body = (
