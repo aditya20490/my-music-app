@@ -102,8 +102,8 @@ async function removeKey(key) {
 
 export const DEFAULT_SETTINGS = {
   theme: 'dark',
-  view: 'list', // list | grid3
-  sort: 'title',
+  view: 'grid3', // list | grid3 | grid4
+  sort: 'newest',
   dir: 'asc',
   shuffle: false,
   repeat: 'off',
@@ -112,7 +112,7 @@ export const DEFAULT_SETTINGS = {
 export async function loadSettings() {
   const saved = await getJSON('mm_settings_v1', {});
   const merged = { ...DEFAULT_SETTINGS, ...saved };
-  if (merged.view !== 'list') merged.view = 'grid3'; // the old 2-grid option is gone
+  if (merged.view !== 'list' && merged.view !== 'grid4') merged.view = 'grid3'; // the old 2-grid option is gone
   return merged;
 }
 
