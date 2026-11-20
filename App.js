@@ -11,6 +11,7 @@ import {
   Alert,
   useWindowDimensions,
   BackHandler,
+  Keyboard,
   AppState,
   Animated,
   Easing,
@@ -238,7 +239,36 @@ function MusicApp({ settings, updateSettings }) {
     })();
   }, []);
 
-  // Android back button: closes the options, cancels selecting, or closes the album / artist page
+  // ---------- Search box focus ----------
+  // There are two search boxes (the one in the header and the one in the sliding bar).
+  // dismissSearch takes the focus away from both, so the keyboard closes and the cursor stops blinking.
+  const headerSearchRef = useRef(null);
+  const barSearchRef = useRef(null);
+  const searchFocus = useRef(false);
+  const dismissSearch = useCallback(() => {
+    [headerSearchRef, barSearchRef].forEach((r) => {
+      const el = r.current;
+      try {
+        if (el && el.isFocused && el.isFocused()) el.blur();
+      } catch (e) {}
+    });
+    searchFocus.current = false;
+  }, []);
+
+  // If the keyboard gets closed some other way (for example the phone's back gesture), the box must not stay focused
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidHide', dismissSearch);
+    return () => sub.remove();
+  }, [dismissSearch]);
+
+  // Whenever something opens on top of the home screen (player, editor, options, album page),
+  // the search box lets go of the focus, so the keyboard does not pop up again when you come back
+  useEffect(() => {
+    if (playerOpen || editSong || albumEditor || sheetOpen || openGroup) dismissSearch();
+  }, [playerOpen, editSong, albumEditor, sheetOpen, openGroup, dismissSearch]);
+
+  // Android back button: closes the options, cancels selecting, closes the album / artist page,
+  // or undoes the current search (clears the search and goes back to the normal home screen)
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (sheetOpen) {
@@ -254,10 +284,15 @@ function MusicApp({ settings, updateSettings }) {
         setOpenGroup(null);
         return true;
       }
+      if (query.length > 0) {
+        dismissSearch();
+        setQuery('');
+        return true;
+      }
       return false;
     });
     return () => sub.remove();
-  }, [openGroup, selecting, sheetOpen]);
+  }, [openGroup, selecting, sheetOpen, query, dismissSearch]);
 
   // Leaving the Albums tab cancels selecting
   useEffect(() => {
@@ -752,7 +787,6 @@ function MusicApp({ settings, updateSettings }) {
   const [barOn, setBarOn] = useState(false);
   const lastY = useRef(0);
   const accY = useRef(0);
-  const searchFocus = useRef(false);
   const setBar = useCallback((on) => {
     if (barShown.current === on) return;
     barShown.current = on;
@@ -962,12 +996,16 @@ function MusicApp({ settings, updateSettings }) {
       <View style={s.searchBox}>
         <Ionicons name="search" size={18} color={t.muted} />
         <TextInput
+          ref={headerSearchRef}
           style={s.searchInput}
           placeholder="Search songs, artists, albums"
           placeholderTextColor={t.muted}
           value={query}
           onChangeText={setQuery}
           autoCorrect={false}
+          returnKeyType="search"
+          submitBehavior="blurAndSubmit"
+          onSubmitEditing={dismissSearch}
         />
         {query.length > 0 ? (
           <TouchableOpacity onPress={() => setQuery('')}>
@@ -1062,6 +1100,8 @@ function MusicApp({ settings, updateSettings }) {
         extraData={listExtra}
         numColumns={columns}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={dismissSearch}
         columnWrapperStyle={gridMode ? { gap: GRID_GAP, marginBottom: GRID_GAP } : undefined}
         initialNumToRender={gridMode ? 12 : 16}
         maxToRenderPerBatch={12}
@@ -1087,6 +1127,8 @@ function MusicApp({ settings, updateSettings }) {
         renderItem={renderMix}
         numColumns={2}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={dismissSearch}
         columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
         initialNumToRender={6}
         maxToRenderPerBatch={6}
@@ -1111,6 +1153,8 @@ function MusicApp({ settings, updateSettings }) {
         extraData={selected}
         numColumns={2}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={dismissSearch}
         columnWrapperStyle={{ gap: GAP, paddingHorizontal: PAD, marginBottom: 18 }}
         initialNumToRender={8}
         maxToRenderPerBatch={8}
@@ -1132,6 +1176,8 @@ function MusicApp({ settings, updateSettings }) {
         keyExtractor={(item) => item.key}
         renderItem={renderArtist}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScrollBeginDrag={dismissSearch}
         initialNumToRender={16}
         windowSize={5}
         removeClippedSubviews
@@ -1169,12 +1215,16 @@ function MusicApp({ settings, updateSettings }) {
         <View style={s.searchBox}>
           <Ionicons name="search" size={18} color={t.muted} />
           <TextInput
+            ref={barSearchRef}
             style={s.searchInput}
             placeholder="Search songs, artists, albums"
             placeholderTextColor={t.muted}
             value={query}
             onChangeText={setQuery}
             autoCorrect={false}
+            returnKeyType="search"
+            submitBehavior="blurAndSubmit"
+            onSubmitEditing={dismissSearch}
             onFocus={() => {
               searchFocus.current = true;
             }}
