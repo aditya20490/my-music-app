@@ -467,28 +467,43 @@ function textures() {
 // ---------- animation helpers ----------
 // One clock (0 -> 1, over and over) drives everything. Each layer picks its own speed (whole cycles) and phase from it.
 // It restarts itself if it ever stops by accident, and "nudge" restarts it whenever the player changes page or opens a sheet.
+// Every restart (nudge, pause -> play, a safety restart) carries on from the exact spot where the clock was,
+// so the background never jumps back to the beginning.
 function useClock(run, dur, nudge) {
   const v = useRef(new Animated.Value(0)).current;
+  const pos = useRef(0); // where the clock was (0 -> 1) when it last stopped
   useEffect(() => {
     if (!run) return undefined;
     let alive = true;
     let timer = null;
-    const cycle = () => {
+    let from = pos.current; // where the current stretch of the animation started
+    let began = Date.now(); // and when
+    // where the clock is right now (0 -> 1)
+    const where = () => {
+      const p = from + (Date.now() - began) / dur;
+      return p - Math.floor(p);
+    };
+    const cycle = (start) => {
       if (!alive) return;
       clearTimeout(timer);
-      v.setValue(0);
-      Animated.timing(v, { toValue: 1, duration: dur, easing: Easing.linear, useNativeDriver: true }).start(() => {
-        if (alive) cycle();
+      from = start;
+      began = Date.now();
+      const left = Math.max(300, dur * (1 - start));
+      v.setValue(start);
+      Animated.timing(v, { toValue: 1, duration: left, easing: Easing.linear, useNativeDriver: true }).start((r) => {
+        // finished the round: start the next one from 0. Stopped by accident: carry on from where it was.
+        if (alive) cycle(r && r.finished ? 0 : where());
       });
       // if the animation ever dies without finishing, this brings it back
       timer = setTimeout(() => {
         if (alive) v.stopAnimation();
-      }, dur + 1500);
+      }, left + 1500);
     };
-    cycle();
+    cycle(pos.current);
     return () => {
       alive = false;
       clearTimeout(timer);
+      pos.current = where(); // remember the spot for the next start
       v.stopAnimation();
     };
   }, [run, dur, nudge]);
@@ -836,17 +851,23 @@ const EFFECTS = { aurora: Aurora, liquid: Liquid, nebula: Nebula, silk: Silk, oc
 const PERIOD = { fire: 8000 }; // embers move faster than the rest (default 36 seconds per round)
 
 // When the colors change (other color chosen, or the cover changed) the new ones fade in over the old ones
+let layerId = 0;
 function usePalLayers(spec) {
   const sig = spec.pal.join('|') + '#' + (spec.base ? spec.base.join('|') : '');
-  const [layers, setLayers] = useState(() => [{ key: sig, pal: spec.pal, base: spec.base, op: new Animated.Value(1) }]);
+  const [layers, setLayers] = useState(() => [{ key: 'L' + layerId++, pal: spec.pal, base: spec.base, op: new Animated.Value(1) }]);
   const last = useRef(sig);
   useEffect(() => {
     if (last.current === sig) return;
     last.current = sig;
-    const nl = { key: sig, pal: spec.pal, base: spec.base, op: new Animated.Value(0) };
+    const nl = { key: 'L' + layerId++, pal: spec.pal, base: spec.base, op: new Animated.Value(0) };
     setLayers((cur) => [...cur, nl]);
     Animated.timing(nl.op, { toValue: 1, duration: 1000, useNativeDriver: true }).start(() => {
-      setLayers((cur) => cur.slice(-1));
+      // once this layer is fully in, drop only the layers older than it
+      // (a newer layer that is still fading in stays, so a quick second change never makes a flash)
+      setLayers((cur) => {
+        const i = cur.indexOf(nl);
+        return i > 0 ? cur.slice(i) : cur;
+      });
     });
   }, [sig]);
   return layers;
