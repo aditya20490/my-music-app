@@ -34,7 +34,6 @@ import {
   GroupTile,
   ArtistRow,
   MiniPlayer,
-  OptionsSheet,
   ROW_H,
 } from './src/ui';
 import NowPlaying from './src/NowPlaying';
@@ -42,6 +41,7 @@ import EditSong from './src/EditSong';
 import FastScroll from './src/FastScroll';
 import AlbumEditor from './src/AlbumEditor';
 import DynamicIsland from './src/DynamicIsland';
+import SettingsScreen from './src/SettingsScreen';
 import * as ForYouStore from './src/foryou/store';
 import * as ForYouEnrich from './src/foryou/enrich';
 import { buildMixes } from './src/foryou/engine';
@@ -261,13 +261,13 @@ function MusicApp({ settings, updateSettings }) {
     return () => sub.remove();
   }, [dismissSearch]);
 
-  // Whenever something opens on top of the home screen (player, editor, options, album page),
+  // Whenever something opens on top of the home screen (player, editor, settings, album page),
   // the search box lets go of the focus, so the keyboard does not pop up again when you come back
   useEffect(() => {
     if (playerOpen || editSong || albumEditor || sheetOpen || openGroup) dismissSearch();
   }, [playerOpen, editSong, albumEditor, sheetOpen, openGroup, dismissSearch]);
 
-  // Android back button: closes the options, cancels selecting, closes the album / artist page,
+  // Android back button: closes Settings, cancels selecting, closes the album / artist page,
   // or undoes the current search (clears the search and goes back to the normal home screen)
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -356,7 +356,7 @@ function MusicApp({ settings, updateSettings }) {
         setScan(null);
         const missing = out.filter((x) => !x.hasMeta).length;
         if (missing > 0 && Lib.getDiagnostics().metaOk + Lib.getDiagnostics().metaJs === 0) {
-          setErrorText('Artist, album and cover info could not be read. Open Options > Library info to see why.');
+          setErrorText('Artist, album and cover info could not be read. Open Settings > Library info to see why.');
         }
       }
       // File sizes (for "Largest first / Smallest first"), read quietly in the background
@@ -957,7 +957,7 @@ function MusicApp({ settings, updateSettings }) {
   let emptyText = 'Nothing matches your search.';
   if (songs.length === 0) emptyText = 'No songs found yet.';
   else if (tab === 'favs' && query.trim() === '') emptyText = 'No favorites yet. Tap the heart on a song.';
-  else if (tab === 'albums' && query.trim() === '') emptyText = 'No albums to show. Hidden ones can be shown again in Options.';
+  else if (tab === 'albums' && query.trim() === '') emptyText = 'No albums to show. Hidden ones can be shown again in Settings.';
 
   const emptyBlock = (
     <View style={s.emptyWrap}>
@@ -988,7 +988,7 @@ function MusicApp({ settings, updateSettings }) {
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity style={s.headerBtn} onPress={() => setSheetOpen(true)}>
-          <Ionicons name="options" size={22} color={t.text} />
+          <Ionicons name="settings-outline" size={22} color={t.text} />
         </TouchableOpacity>
       </View>
 
@@ -1381,7 +1381,7 @@ function MusicApp({ settings, updateSettings }) {
         />
       ) : null}
 
-      {/* Dynamic island at the top of the screen (can be switched off in Options) */}
+      {/* Dynamic island at the top of the screen (can be switched off in Settings) */}
       {current && settings.island !== false ? (
         <DynamicIsland
           song={current}
@@ -1443,9 +1443,9 @@ function MusicApp({ settings, updateSettings }) {
         onSave={saveAlbum}
       />
 
-      {/* Options: only exists while it is open, so it shows up instantly */}
+      {/* Settings: a full screen of its own, only exists while it is open */}
       {sheetOpen ? (
-        <OptionsSheet
+        <SettingsScreen
           onClose={() => setSheetOpen(false)}
           settings={settings}
           sortMode={sortMode}
@@ -1454,6 +1454,8 @@ function MusicApp({ settings, updateSettings }) {
           onRescan={rescan}
           hiddenAlbums={hiddenList}
           onUnhide={unhideAlbum}
+          songs={songs}
+          sizes={sizes}
         />
       ) : null}
     </LinearGradient>
